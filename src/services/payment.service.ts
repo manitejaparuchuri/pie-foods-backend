@@ -25,8 +25,13 @@ export const createRazorpayOrderService = async (
     throw new Error("Order not eligible for payment");
   }
 
+  const amountInPaise = Math.round(Number(order.total_amount) * 100);
+  if (!amountInPaise || amountInPaise <= 0) {
+    throw new Error("Order not eligible for payment");
+  }
+
   const razorpayOrder = await razorpay.orders.create({
-    amount: Math.round(Number(order.total_amount) * 100),
+    amount: amountInPaise,
     currency: "INR",
     receipt: `receipt_${order_id}`,
     notes: {
@@ -123,8 +128,9 @@ export const verifyPaymentService = async (
 
     if (existingPayments.length > 0) {
       await connection.beginTransaction();
+      // Order already paid via webhook — just ensure status is PAID and cart is cleared
       await connection.query(
-        "UPDATE orders SET status='PAID', provider_order_id=? WHERE order_id=? AND user_id=?",
+        "UPDATE orders SET status='PAID', provider_order_id=? WHERE order_id=? AND user_id=? AND status='PENDING_PAYMENT'",
         [normalizedRazorpayOrderId, order_id, userId]
       );
       await connection.query("DELETE FROM cart_items WHERE user_id=?", [userId]);
@@ -154,7 +160,7 @@ export const verifyPaymentService = async (
     await connection.beginTransaction();
 
     await connection.query(
-      "UPDATE orders SET status='PAID', provider_order_id=? WHERE order_id=? AND user_id=?",
+      "UPDATE orders SET status='PAID', provider_order_id=? WHERE order_id=? AND user_id=? AND status='PENDING_PAYMENT'",
       [normalizedRazorpayOrderId, order_id, userId]
     );
 

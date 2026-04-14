@@ -32,6 +32,10 @@ interface OrderHistory {
   orderDate: Date | null;
   status: string;
   totalAmount: number;
+  subtotalAmount: number;
+  couponDiscountAmount: number;
+  finalAmount: number;
+  couponCode: string | null;
   shippingId: string;
   items: OrderHistoryItem[];
 }
@@ -41,6 +45,10 @@ interface OrderHistoryRow {
   order_date: Date | null;
   status: string;
   total_amount: number | string;
+  subtotal_amount: number | string | null;
+  coupon_discount_amount: number | string | null;
+  final_amount: number | string | null;
+  coupon_code: string | null;
   shipping_id: string;
   product_id: number | null;
   product_name: string | null;
@@ -168,6 +176,10 @@ class OrderService {
         o.order_date,
         o.status,
         o.total_amount,
+        o.subtotal_amount,
+        o.coupon_discount_amount,
+        o.final_amount,
+        o.coupon_code,
         o.shipping_id,
         oi.product_id,
         p.name AS product_name,
@@ -192,6 +204,10 @@ class OrderService {
           orderDate: row.order_date ?? null,
           status: row.status,
           totalAmount: Number(row.total_amount) || 0,
+          subtotalAmount: Number(row.subtotal_amount) || 0,
+          couponDiscountAmount: Number(row.coupon_discount_amount) || 0,
+          finalAmount: Number(row.final_amount) || 0,
+          couponCode: row.coupon_code ?? null,
           shippingId: row.shipping_id,
           items: []
         };

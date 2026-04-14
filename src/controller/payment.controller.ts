@@ -135,7 +135,7 @@ export const razorpayWebhook = async (req: Request, res: Response) => {
 
     await pool.query(
       `INSERT INTO payment_webhook_events
-      (provider, event_id, payload, received_at)
+      (provider, event_id_ext, payload, received_at)
       VALUES ('RAZORPAY', ?, ?, NOW())`,
       [paymentEntity?.id || "unknown", JSON.stringify(body)]
     );
@@ -172,17 +172,31 @@ export const razorpayWebhook = async (req: Request, res: Response) => {
         return res.status(200).json({ status: "duplicate" });
       }
 
-      await pool.query(
-        "UPDATE orders SET status='PAID' WHERE order_id=?",
-        [resolvedOrderId]
-      );
+      const connection = await pool.getConnection();
+      try {
+        await connection.beginTransaction();
 
-      await pool.query(
-        `INSERT INTO payments
-        (order_id, provider, provider_order_id, provider_payment_id, provider_signature, amount, currency, status, idempotency_key, payment_date, updated_at)
-        VALUES (?, 'RAZORPAY', ?, ?, ?, ?, ?, 'SUCCESS', ?, NOW(), NOW())`,
-        [resolvedOrderId, razorpayOrderId, paymentId, signature, amountInPaise, currency, idempotencyKey]
-      );
+        await connection.query(
+          "UPDATE orders SET status='PAID' WHERE order_id=? AND status='PENDING_PAYMENT'",
+          [resolvedOrderId]
+        );
+
+        await connection.query(
+          `INSERT INTO payments
+          (order_id, provider, provider_order_id, provider_payment_id, provider_signature, amount, currency, status, idempotency_key, payment_date, updated_at)
+          VALUES (?, 'RAZORPAY', ?, ?, ?, ?, ?, 'SUCCESS', ?, NOW(), NOW())`,
+          [resolvedOrderId, razorpayOrderId, paymentId, signature, amountInPaise, currency, idempotencyKey]
+        );
+
+        await connection.query("DELETE FROM cart_items WHERE user_id = (SELECT user_id FROM orders WHERE order_id = ? LIMIT 1)", [resolvedOrderId]);
+
+        await connection.commit();
+      } catch (txErr) {
+        await connection.rollback();
+        throw txErr;
+      } finally {
+        connection.release();
+      }
 
       console.log("Payment saved via webhook:", paymentId);
     }
