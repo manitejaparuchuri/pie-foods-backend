@@ -1,6 +1,6 @@
-import dotenv from "dotenv";
 import { mkdir, readdir, stat, writeFile } from "fs/promises";
 import path from "path";
+import { hasEnvValue } from "../config/env";
 
 import db from "../config/db";
 import {
@@ -10,8 +10,6 @@ import {
 } from "../config/r2";
 import { getAvailableProductImageFields } from "../utils/product-columns";
 import { generateProductThumbnails } from "../utils/product-thumbnails";
-
-dotenv.config({ override: true });
 
 const PROJECT_ROOT = process.cwd();
 const ASSETS_ROOT = path.join(PROJECT_ROOT, "assets");
@@ -33,10 +31,10 @@ type UploadedAsset = {
   publicUrl: string;
 };
 
-const getEnv = (key: string): string => String(process.env[key] || "").trim();
-
 function hasDatabaseConfig(): boolean {
-  return ["DB_HOST", "DB_USER", "DB_PASS", "DB_NAME"].every((key) => !!getEnv(key));
+  return ["DB_HOST", "DB_USER", "DB_PASS", "DB_NAME"].every((key) =>
+    hasEnvValue(key)
+  );
 }
 
 async function collectAssetFiles(dir: string): Promise<string[]> {

@@ -1,4 +1,4 @@
-import dotenv from "dotenv";
+import { formatEnvRequirement, getEnvValue, getMissingRequiredEnvVars } from "./config/env";
 import express, { NextFunction, Request, Response } from "express";
 import cors from "cors";
 import { join } from "path";
@@ -17,8 +17,6 @@ import reviewRoutes from "./routers/review.routes";
 import contactRoutes from "./routers/contact.routes";
 import adminRoutes from "./routers/admin.routes";
 
-dotenv.config({ override: true });
-
 const app = express();
 app.disable("x-powered-by");
 
@@ -35,19 +33,20 @@ const requiredEnvVars = [
   "RAZORPAY_WEBHOOK_SECRET",
 ];
 
-const missingEnvVars = requiredEnvVars.filter(
-  (key) => !String(process.env[key] || "").trim()
-);
+const missingEnvVars = getMissingRequiredEnvVars(requiredEnvVars);
 
 if (missingEnvVars.length) {
-  throw new Error(`Missing required environment variables: ${missingEnvVars.join(", ")}`);
+  throw new Error(
+    `Missing required environment variables: ${missingEnvVars
+      .map(formatEnvRequirement)
+      .join(", ")}`
+  );
 }
 
-console.log("DB CONFIG:", {
-  host: process.env.DB_HOST,
-  user: process.env.DB_USER,
-  db: process.env.DB_NAME,
-  port: process.env.DB_PORT || "3306"
+console.log("Database config detected:", {
+  host: getEnvValue("DB_HOST"),
+  db: getEnvValue("DB_NAME"),
+  port: getEnvValue("DB_PORT") || "3306",
 });
 
 const defaultAllowedOrigins = [
