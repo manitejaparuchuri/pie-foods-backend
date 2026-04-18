@@ -5,5 +5,5 @@ export interface Order{
   order_date?: Date;       // auto-filled by SQL
   status?: string;         // default 'Pending'
   total_amount: number;
-  shipping_id?: number;
+  shipping_id?: string;
 }

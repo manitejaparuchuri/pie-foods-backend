@@ -4,11 +4,12 @@ import { getSelectableProductColumns } from '../utils/product-columns';
 
 export const getAll = async (_req: Request, res: Response) => {
   try {
-    const selectColumns = await getSelectableProductColumns();
+    const selectColumns = await getSelectableProductColumns("p");
     const [rows] = await pool.query(
-      `SELECT ${selectColumns.join(", ")}
-       FROM products
-       ORDER BY created_at DESC`
+      `SELECT ${selectColumns.join(", ")}, c.name AS category_name
+       FROM products p
+       LEFT JOIN categories c ON c.category_id = p.category_id
+       ORDER BY p.created_at DESC, p.product_id DESC`
     );
 
     res.json(rows);
@@ -24,8 +25,9 @@ export const getById = async (req: Request, res: Response) => {
     const selectColumns = await getSelectableProductColumns('p');
 
     const [rows]: any = await pool.query(
-      `SELECT ${selectColumns.join(", ")}
+      `SELECT ${selectColumns.join(", ")}, c.name AS category_name
        FROM products p
+       LEFT JOIN categories c ON c.category_id = p.category_id
        WHERE p.product_id = ?`,
       [productId]
     );
@@ -47,9 +49,11 @@ export const getByCategory = async (req: Request, res: Response) => {
     const selectColumns = await getSelectableProductColumns('p');
 
     const [rows] = await pool.query(
-      `SELECT ${selectColumns.join(", ")}
+      `SELECT ${selectColumns.join(", ")}, c.name AS category_name
        FROM products p
-       WHERE p.category_id = ?`,
+       LEFT JOIN categories c ON c.category_id = p.category_id
+       WHERE p.category_id = ?
+       ORDER BY p.created_at DESC, p.product_id DESC`,
       [categoryId]
     );
 

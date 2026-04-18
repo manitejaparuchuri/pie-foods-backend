@@ -130,10 +130,10 @@ app.get("/healthz", (_req: Request, res: Response) => {
   return res.status(200).json({ status: "ok" });
 });
 
-const imagesPath = join(__dirname, "../assets/images");
+const assetsPath = join(__dirname, "../assets");
 app.use(
-  "/assets/images",
-  express.static(imagesPath, {
+  "/assets",
+  express.static(assetsPath, {
     setHeaders: (res) => {
       res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
     },

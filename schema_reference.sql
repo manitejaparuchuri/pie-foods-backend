@@ -11,13 +11,18 @@
 /*!40101 SET @OLD_CHARACTER_SET_CLIENT=@@CHARACTER_SET_CLIENT */;
 /*!40101 SET @OLD_CHARACTER_SET_RESULTS=@@CHARACTER_SET_RESULTS */;
 /*!40101 SET @OLD_COLLATION_CONNECTION=@@COLLATION_CONNECTION */;
-/*!50503 SET NAMES utf8 */;
+/*!50503 SET NAMES utf8mb4 */;
 /*!40103 SET @OLD_TIME_ZONE=@@TIME_ZONE */;
 /*!40103 SET TIME_ZONE='+00:00' */;
 /*!40014 SET @OLD_UNIQUE_CHECKS=@@UNIQUE_CHECKS, UNIQUE_CHECKS=0 */;
 /*!40014 SET @OLD_FOREIGN_KEY_CHECKS=@@FOREIGN_KEY_CHECKS, FOREIGN_KEY_CHECKS=0 */;
 /*!40101 SET @OLD_SQL_MODE=@@SQL_MODE, SQL_MODE='NO_AUTO_VALUE_ON_ZERO' */;
 /*!40111 SET @OLD_SQL_NOTES=@@SQL_NOTES, SQL_NOTES=0 */;
+
+CREATE DATABASE IF NOT EXISTS `piefruits`
+  CHARACTER SET utf8mb4
+  COLLATE utf8mb4_0900_ai_ci;
+USE `piefruits`;
 
 -- ---------------------------------------------------------------------------
 -- users
@@ -94,7 +99,7 @@ CREATE TABLE `product_categories` (
 -- ---------------------------------------------------------------------------
 DROP TABLE IF EXISTS `shipping_info`;
 CREATE TABLE `shipping_info` (
-  `shipping_id`  int          NOT NULL AUTO_INCREMENT,
+  `shipping_id`  varchar(64)  NOT NULL,
   `user_id`      int          DEFAULT NULL,
   `address`      text,
   `city`         varchar(100) DEFAULT NULL,
@@ -145,7 +150,7 @@ CREATE TABLE `orders` (
   `order_date`             timestamp      NULL DEFAULT CURRENT_TIMESTAMP,
   `status`                 enum('PENDING_PAYMENT','PAID','pending','processing','shipped','delivered','cancelled') DEFAULT 'PENDING_PAYMENT',
   `total_amount`           decimal(10,2)  DEFAULT NULL,
-  `shipping_id`            int            DEFAULT NULL,
+  `shipping_id`            varchar(64)    DEFAULT NULL,
   `coupon_id`              bigint unsigned DEFAULT NULL,
   `coupon_code`            varchar(50)    DEFAULT NULL,
   `subtotal_amount`        decimal(10,2)  DEFAULT NULL,
@@ -284,4 +289,4 @@ CREATE TABLE `reviews` (
 /*!40101 SET CHARACTER_SET_CLIENT=@OLD_CHARACTER_SET_CLIENT */;
 /*!40101 SET CHARACTER_SET_RESULTS=@OLD_CHARACTER_SET_RESULTS */;
 /*!40101 SET COLLATION_CONNECTION=@OLD_COLLATION_CONNECTION */;
-/*!40111 SET SQL_NOTES=@OLD_SQL_NOTES */;
+/*!40111 SET SQL_NOTES=IFNULL(@OLD_SQL_NOTES, 0) */;

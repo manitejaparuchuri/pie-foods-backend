@@ -1,5 +1,7 @@
 import { Request, Response } from "express";
+import { unlink } from "fs/promises";
 import db from "../config/db";
+import { isR2Configured, uploadFileToR2 } from "../config/r2";
 import {
   getAvailableProductImageFields,
   getSelectableProductColumns,
@@ -1007,6 +1009,21 @@ export const uploadAdminImage = async (req: Request, res: Response) => {
     const filename = String(file.filename || "").trim();
     if (!filename) {
       return res.status(500).json({ message: "Uploaded file name is invalid" });
+    }
+
+    const localPath = String((file as Express.Multer.File & { path?: string }).path || "").trim();
+
+    if (isR2Configured() && localPath) {
+      const objectKey = `products/admin/${filename}`;
+      const url = await uploadFileToR2(localPath, objectKey);
+      await unlink(localPath).catch(() => undefined);
+
+      return res.status(201).json({
+        message: "Image uploaded",
+        filename,
+        path: url,
+        url,
+      });
     }
 
     const path = `/assets/images/${filename}`;

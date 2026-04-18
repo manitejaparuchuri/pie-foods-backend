@@ -11,12 +11,16 @@
     "build": "npx tsc",
     "start": "node dist/server.js",
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
-    "lint": "eslint . --ext .ts"
+    "lint": "eslint . --ext .ts",
+    "assets:thumbnails": "ts-node src/scripts/generate-product-thumbnails.ts",
+    "r2:sync-assets": "ts-node src/scripts/sync-assets-to-r2.ts",
+    "seed:catalog": "ts-node src/scripts/seed-catalog.ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1032.0",
     "@types/multer": "^2.0.0",
     "axios": "^1.13.5",
     "bcryptjs": "^3.0.3",
@@ -28,10 +32,12 @@
     "google-auth-library": "^10.5.0",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",
-    "nodemailer": "^8.0.1",
+    "mime-types": "^3.0.2",
     "multer": "^2.0.2",
     "mysql2": "^3.16.2",
-    "razorpay": "^2.9.6"
+    "nodemailer": "^8.0.1",
+    "razorpay": "^2.9.6",
+    "sharp": "^0.34.5"
   },
   "devDependencies": {
     "@types/bcryptjs": "^2.4.6",
@@ -40,8 +46,8 @@
     "@types/express": "^5.0.6",
     "@types/express-rate-limit": "^5.1.3",
     "@types/jsonwebtoken": "^9.0.10",
-    "@types/nodemailer": "^6.4.15",
     "@types/node": "^24.10.9",
+    "@types/nodemailer": "^6.4.15",
     "@typescript-eslint/eslint-plugin": "^6.1.0",
     "@typescript-eslint/parser": "^6.1.0",
     "eslint": "^8.51.0",
