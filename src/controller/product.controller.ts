@@ -1,9 +1,16 @@
 import { Request, Response } from 'express';
 import pool from '../config/db';
 import { getSelectableProductColumns } from '../utils/product-columns';
+import { useFirestoreCatalog } from '../config/catalog';
+import firestoreCatalogService from '../services/catalog-firestore.service';
 
 export const getAll = async (_req: Request, res: Response) => {
   try {
+    if (useFirestoreCatalog()) {
+      const rows = await firestoreCatalogService.getAllProducts();
+      return res.json(rows);
+    }
+
     const selectColumns = await getSelectableProductColumns("p");
     const [rows] = await pool.query(
       `SELECT ${selectColumns.join(", ")}, c.name AS category_name
@@ -22,6 +29,15 @@ export const getAll = async (_req: Request, res: Response) => {
 export const getById = async (req: Request, res: Response) => {
   try {
     const productId = Number(req.params.id);
+    if (useFirestoreCatalog()) {
+      const product = await firestoreCatalogService.getProductById(productId);
+      if (!product) {
+        return res.status(404).json({ message: 'Product not found' });
+      }
+
+      return res.json(product);
+    }
+
     const selectColumns = await getSelectableProductColumns('p');
 
     const [rows]: any = await pool.query(
@@ -46,6 +62,11 @@ export const getById = async (req: Request, res: Response) => {
 export const getByCategory = async (req: Request, res: Response) => {
   try {
     const categoryId = Number(req.params.categoryId);
+    if (useFirestoreCatalog()) {
+      const rows = await firestoreCatalogService.getProductsByCategory(categoryId);
+      return res.json(rows);
+    }
+
     const selectColumns = await getSelectableProductColumns('p');
 
     const [rows] = await pool.query(

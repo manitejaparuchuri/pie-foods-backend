@@ -1,7 +1,11 @@
 import { Request, Response } from "express";
 import { unlink } from "fs/promises";
 import db from "../config/db";
+import { useFirestoreCatalog } from "../config/catalog";
 import { isR2Configured, uploadFileToR2 } from "../config/r2";
+import { useFirebaseAuth } from "../config/auth-provider";
+import firestoreCatalogService from "../services/catalog-firestore.service";
+import { isAuthFlowError, loginFirebaseAdmin } from "../services/firebase-auth.service";
 import {
   getAvailableProductImageFields,
   getSelectableProductColumns,
@@ -72,6 +76,147 @@ const normalizeCouponCode = (value: unknown): string => {
     .replace(/\s+/g, "");
 };
 
+const FIRESTORE_PRODUCT_IMAGE_FIELDS = [
+  "image_url",
+  "image_url1",
+  "image_url2",
+  "image_url3",
+  "image_url4",
+  "image_url5",
+] as const;
+
+const toIsoString = (value: any): string => {
+  if (!value) {
+    return new Date().toISOString();
+  }
+  if (typeof value?.toDate === "function") {
+    return value.toDate().toISOString();
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+};
+
+const getCategorySlug = (category: any): string | null => {
+  return String(category?.slug || category?.category_slug || "").trim() || null;
+};
+
+const normalizeFirestoreCategoryForAdmin = (category: any, productCount = 0) => ({
+  category_id: Number(category.category_id),
+  name: String(category.name || ""),
+  description: category.description ?? null,
+  image_url: category.image_url ?? null,
+  product_count: productCount,
+});
+
+const normalizeFirestoreProductForAdmin = (product: any) => ({
+  ...product,
+  product_id: Number(product.product_id),
+  price: Number(product.price) || 0,
+  stock_quantity: Number(product.stock_quantity) || 0,
+  category_id: Number(product.category_id) || 0,
+  is_active: product.is_active === false ? 0 : 1,
+  created_at: toIsoString(product.created_at),
+});
+
+const normalizeFirestoreComboForAdmin = (combo: any) => ({
+  combo_id: Number(combo.combo_id),
+  name: String(combo.name || ""),
+  slug: combo.slug ?? null,
+  description: combo.description ?? null,
+  badge: combo.badge ?? null,
+  product_ids: Array.isArray(combo.product_ids)
+    ? combo.product_ids.map((id: unknown) => Number(id)).filter((id: number) => Number.isInteger(id) && id > 0)
+    : [],
+  discount_percent: Number(combo.discount_percent) || 0,
+  is_active: combo.is_active === false ? 0 : 1,
+  sort_order: Number(combo.sort_order) || Number(combo.combo_id) || 0,
+  created_at: toIsoString(combo.created_at),
+  updated_at: toIsoString(combo.updated_at),
+});
+
+const normalizeFirestoreBannerForAdmin = (banner: any) => ({
+  banner_id: Number(banner.banner_id),
+  slug: banner.slug ?? null,
+  image_url: banner.image_url ?? null,
+  caption: String(banner.caption || ""),
+  title_top: String(banner.title_top || ""),
+  title_accent: String(banner.title_accent || ""),
+  title_bottom: banner.title_bottom ?? null,
+  description: banner.description ?? null,
+  chips: Array.isArray(banner.chips) ? banner.chips : [],
+  primary_cta: banner.primary_cta || { text: "Shop Now", link: "/products" },
+  secondary_cta: banner.secondary_cta ?? null,
+  align: banner.align === "right" ? "right" : "left",
+  is_active: banner.is_active === false ? 0 : 1,
+  sort_order: Number(banner.sort_order) || Number(banner.banner_id) || 0,
+  created_at: toIsoString(banner.created_at),
+  updated_at: toIsoString(banner.updated_at),
+});
+
+const shouldUseFirestoreAdminCatalog = (): boolean => useFirestoreCatalog();
+
+const parseProductIds = (value: unknown): number[] => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  const seen = new Set<number>();
+  const ids: number[] = [];
+
+  for (const item of value) {
+    const parsed = parsePositiveInt(item);
+    if (parsed && !seen.has(parsed)) {
+      seen.add(parsed);
+      ids.push(parsed);
+    }
+  }
+
+  return ids;
+};
+
+const ALLOWED_BANNER_CHIP_ICONS = new Set(["leaf", "zero", "gi", "fruit", "drop", "sparkle", "box"]);
+
+const parseBannerChips = (value: unknown): Array<{ icon: string; label: string }> => {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  return value
+    .map((chip) => {
+      if (!chip || typeof chip !== "object") {
+        return null;
+      }
+
+      const rawChip = chip as Record<string, unknown>;
+      const icon = String(rawChip.icon || "").trim();
+      const label = String(rawChip.label || "").trim();
+
+      if (!ALLOWED_BANNER_CHIP_ICONS.has(icon) || !label) {
+        return null;
+      }
+
+      return { icon, label };
+    })
+    .filter((chip): chip is { icon: string; label: string } => Boolean(chip))
+    .slice(0, 4);
+};
+
+const parseBannerCta = (value: unknown): { text: string; link: string } | null => {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+
+  const rawCta = value as Record<string, unknown>;
+  const text = String(rawCta.text || "").trim();
+  const link = String(rawCta.link || "").trim();
+
+  if (!text || !link) {
+    return null;
+  }
+
+  return { text, link };
+};
+
 const isEqualSecret = (provided: string, expected: string): boolean => {
   const providedBuf = Buffer.from(provided);
   const expectedBuf = Buffer.from(expected);
@@ -89,6 +234,37 @@ export const adminLogin = async (req: Request, res: Response) => {
 
   if (!username || !password) {
     return res.status(400).json({ message: "Username and password are required" });
+  }
+
+  if (useFirebaseAuth()) {
+    try {
+      const admin = await loginFirebaseAdmin(username, password);
+      const token = jwt.sign(
+        {
+          id: ADMIN_TOKEN_USER_ID,
+          role: "admin",
+          username: admin.email,
+          firebaseUid: admin.firebaseUid,
+        },
+        process.env.JWT_SECRET as string,
+        { expiresIn: "12h" }
+      );
+
+      return res.json({
+        message: "Admin login successful",
+        token,
+        admin: {
+          username: admin.email,
+          role: "admin",
+        },
+      });
+    } catch (error) {
+      if (isAuthFlowError(error)) {
+        return res.status(error.statusCode).json({ message: error.message });
+      }
+      console.error("FIREBASE ADMIN LOGIN ERROR:", error);
+      return res.status(500).json({ message: "Unable to sign in admin" });
+    }
   }
 
   if (
@@ -122,6 +298,36 @@ export const adminLogin = async (req: Request, res: Response) => {
 
 export const getAdminBootstrap = async (_req: Request, res: Response) => {
   try {
+    if (shouldUseFirestoreAdminCatalog()) {
+      const [categories, products, combos, banners] = await Promise.all([
+        firestoreCatalogService.getAllCategories(),
+        firestoreCatalogService.getAllProductsForAdmin(),
+        firestoreCatalogService.getAllCombos(),
+        firestoreCatalogService.getAllBanners(),
+      ]);
+      const productCounts = new Map<number, number>();
+
+      for (const product of products) {
+        const categoryId = Number(product.category_id || 0);
+        productCounts.set(categoryId, (productCounts.get(categoryId) || 0) + 1);
+      }
+
+      return res.json({
+        categories: categories.map((category) =>
+          normalizeFirestoreCategoryForAdmin(
+            category,
+            productCounts.get(Number(category.category_id)) || 0
+          )
+        ),
+        products: products.map(normalizeFirestoreProductForAdmin),
+        combos: combos.map(normalizeFirestoreComboForAdmin),
+        banners: banners.map(normalizeFirestoreBannerForAdmin),
+        coupons: [],
+        productImageFields: [...FIRESTORE_PRODUCT_IMAGE_FIELDS],
+        supportsProductActive: true,
+      });
+    }
+
     const selectColumns = await getSelectableProductColumns();
     const productImageFields = await getAvailableProductImageFields();
     const writableProductColumns = await getWritableProductColumns();
@@ -169,6 +375,8 @@ export const getAdminBootstrap = async (_req: Request, res: Response) => {
     return res.json({
       categories: categoryRows[0],
       products: productRows[0],
+      combos: [],
+      banners: [],
       coupons: couponRows[0],
       productImageFields,
       supportsProductActive: writableProductColumns.includes("is_active"),
@@ -202,6 +410,10 @@ export const createCategory = async (req: Request, res: Response) => {
        LIMIT 1`,
       [result.insertId]
     );
+
+    if (shouldUseFirestoreAdminCatalog()) {
+      await firestoreCatalogService.upsertCategory(rows[0]);
+    }
 
     return res.status(201).json({ message: "Category created", category: rows[0] });
   } catch (error) {
@@ -263,6 +475,10 @@ export const updateCategory = async (req: Request, res: Response) => {
       [categoryId]
     );
 
+    if (shouldUseFirestoreAdminCatalog()) {
+      await firestoreCatalogService.upsertCategory(rows[0]);
+    }
+
     return res.json({ message: "Category updated", category: rows[0] });
   } catch (error) {
     console.error("UPDATE CATEGORY ERROR:", error);
@@ -300,6 +516,10 @@ export const deleteCategory = async (req: Request, res: Response) => {
 
     if (!result.affectedRows) {
       return res.status(404).json({ message: "Category not found" });
+    }
+
+    if (shouldUseFirestoreAdminCatalog()) {
+      await firestoreCatalogService.deleteCategory(categoryId);
     }
 
     return res.json({ message: "Category deleted" });
@@ -367,6 +587,15 @@ export const createProduct = async (req: Request, res: Response) => {
       [result.insertId]
     );
 
+    if (shouldUseFirestoreAdminCatalog()) {
+      const category = await firestoreCatalogService.getCategoryById(categoryId);
+      await firestoreCatalogService.upsertProduct({
+        ...rows[0],
+        category_name: category?.name ?? null,
+        category_slug: getCategorySlug(category),
+      });
+    }
+
     return res.status(201).json({ message: "Product created", product: rows[0] });
   } catch (error) {
     console.error("CREATE PRODUCT ERROR:", error);
@@ -383,6 +612,7 @@ export const updateProduct = async (req: Request, res: Response) => {
   const fields: string[] = [];
   const values: any[] = [];
   const writableProductColumns = new Set(await getWritableProductColumns());
+  let firestoreOnlyIsActive: number | null = null;
 
   if (Object.prototype.hasOwnProperty.call(req.body, "price")) {
     const price = parseNonNegativeNumber(req.body?.price);
@@ -421,15 +651,19 @@ export const updateProduct = async (req: Request, res: Response) => {
   }
 
   if (Object.prototype.hasOwnProperty.call(req.body, "is_active")) {
-    if (!writableProductColumns.has("is_active")) {
-      return res.status(400).json({ message: "Product active status is not supported by this schema" });
-    }
     const isActive = parseBooleanFlag(req.body?.is_active);
     if (isActive === null) {
       return res.status(400).json({ message: "Invalid is_active value" });
     }
-    fields.push("is_active = ?");
-    values.push(isActive);
+
+    if (writableProductColumns.has("is_active")) {
+      fields.push("is_active = ?");
+      values.push(isActive);
+    } else if (shouldUseFirestoreAdminCatalog()) {
+      firestoreOnlyIsActive = isActive;
+    } else {
+      return res.status(400).json({ message: "Product active status is not supported by this schema" });
+    }
   }
 
   const productTextFields = await getUpdatableProductTextColumns();
@@ -454,19 +688,21 @@ export const updateProduct = async (req: Request, res: Response) => {
     values.push(textValue || null);
   }
 
-  if (!fields.length) {
+  if (!fields.length && firestoreOnlyIsActive === null) {
     return res.status(400).json({ message: "No valid fields provided for update" });
   }
 
   try {
-    values.push(productId);
-    const [result]: any = await db.query(
-      `UPDATE products SET ${fields.join(", ")} WHERE product_id = ?`,
-      values
-    );
+    if (fields.length) {
+      values.push(productId);
+      const [result]: any = await db.query(
+        `UPDATE products SET ${fields.join(", ")} WHERE product_id = ?`,
+        values
+      );
 
-    if (!result.affectedRows) {
-      return res.status(404).json({ message: "Product not found" });
+      if (!result.affectedRows) {
+        return res.status(404).json({ message: "Product not found" });
+      }
     }
 
     const selectColumns = await getSelectableProductColumns();
@@ -478,7 +714,23 @@ export const updateProduct = async (req: Request, res: Response) => {
       [productId]
     );
 
-    return res.json({ message: "Product updated", product: rows[0] });
+    if (shouldUseFirestoreAdminCatalog()) {
+      const category = await firestoreCatalogService.getCategoryById(Number(rows[0].category_id));
+      await firestoreCatalogService.upsertProduct({
+        ...rows[0],
+        is_active: firestoreOnlyIsActive ?? rows[0].is_active ?? 1,
+        category_name: category?.name ?? null,
+        category_slug: getCategorySlug(category),
+      });
+    }
+
+    return res.json({
+      message: "Product updated",
+      product: {
+        ...rows[0],
+        ...(firestoreOnlyIsActive === null ? {} : { is_active: firestoreOnlyIsActive }),
+      },
+    });
   } catch (error) {
     console.error("UPDATE PRODUCT ERROR:", error);
     return res.status(500).json({ message: "Unable to update product" });
@@ -501,10 +753,290 @@ export const deleteProduct = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Product not found" });
     }
 
+    if (shouldUseFirestoreAdminCatalog()) {
+      await firestoreCatalogService.deleteProduct(productId);
+    }
+
     return res.json({ message: "Product deleted" });
   } catch (error) {
     console.error("DELETE PRODUCT ERROR:", error);
     return res.status(500).json({ message: "Unable to delete product" });
+  }
+};
+
+export const createCombo = async (req: Request, res: Response) => {
+  if (!shouldUseFirestoreAdminCatalog()) {
+    return res.status(400).json({ message: "Combos are available when Firestore catalog is enabled" });
+  }
+
+  const name = String(req.body?.name || "").trim();
+  const productIds = parseProductIds(req.body?.product_ids);
+  const discountPercent = parseNonNegativeNumber(req.body?.discount_percent ?? 10);
+  const sortOrder =
+    req.body?.sort_order === undefined || req.body?.sort_order === null || String(req.body?.sort_order).trim() === ""
+      ? null
+      : parseNonNegativeInt(req.body?.sort_order);
+  const isActive =
+    req.body?.is_active === undefined ? 1 : parseBooleanFlag(req.body?.is_active);
+
+  if (!name) {
+    return res.status(400).json({ message: "name is required" });
+  }
+  if (productIds.length < 2) {
+    return res.status(400).json({ message: "Select at least 2 products for a combo" });
+  }
+  if (discountPercent === null || discountPercent > 90) {
+    return res.status(400).json({ message: "discount_percent must be between 0 and 90" });
+  }
+  if (sortOrder === undefined) {
+    return res.status(400).json({ message: "Invalid sort_order" });
+  }
+  if (isActive === null) {
+    return res.status(400).json({ message: "Invalid is_active value" });
+  }
+
+  try {
+    const combo = await firestoreCatalogService.upsertCombo({
+      name,
+      description: String(req.body?.description || "").trim() || null,
+      badge: String(req.body?.badge || "").trim() || null,
+      product_ids: productIds,
+      discount_percent: discountPercent,
+      is_active: isActive,
+      sort_order: sortOrder,
+    });
+
+    return res.status(201).json({
+      message: "Combo created",
+      combo: normalizeFirestoreComboForAdmin(combo),
+    });
+  } catch (error) {
+    console.error("CREATE COMBO ERROR:", error);
+    return res.status(500).json({ message: "Unable to create combo" });
+  }
+};
+
+export const updateCombo = async (req: Request, res: Response) => {
+  if (!shouldUseFirestoreAdminCatalog()) {
+    return res.status(400).json({ message: "Combos are available when Firestore catalog is enabled" });
+  }
+
+  const comboId = parsePositiveInt(req.params.id);
+  if (!comboId) {
+    return res.status(400).json({ message: "Invalid combo id" });
+  }
+
+  const name = String(req.body?.name || "").trim();
+  const productIds = parseProductIds(req.body?.product_ids);
+  const discountPercent = parseNonNegativeNumber(req.body?.discount_percent ?? 10);
+  const sortOrder =
+    req.body?.sort_order === undefined || req.body?.sort_order === null || String(req.body?.sort_order).trim() === ""
+      ? comboId
+      : parseNonNegativeInt(req.body?.sort_order);
+  const isActive =
+    req.body?.is_active === undefined ? 1 : parseBooleanFlag(req.body?.is_active);
+
+  if (!name) {
+    return res.status(400).json({ message: "name is required" });
+  }
+  if (productIds.length < 2) {
+    return res.status(400).json({ message: "Select at least 2 products for a combo" });
+  }
+  if (discountPercent === null || discountPercent > 90) {
+    return res.status(400).json({ message: "discount_percent must be between 0 and 90" });
+  }
+  if (sortOrder === null) {
+    return res.status(400).json({ message: "Invalid sort_order" });
+  }
+  if (isActive === null) {
+    return res.status(400).json({ message: "Invalid is_active value" });
+  }
+
+  try {
+    const combo = await firestoreCatalogService.upsertCombo({
+      combo_id: comboId,
+      name,
+      description: String(req.body?.description || "").trim() || null,
+      badge: String(req.body?.badge || "").trim() || null,
+      product_ids: productIds,
+      discount_percent: discountPercent,
+      is_active: isActive,
+      sort_order: sortOrder,
+    });
+
+    return res.json({
+      message: "Combo updated",
+      combo: normalizeFirestoreComboForAdmin(combo),
+    });
+  } catch (error) {
+    console.error("UPDATE COMBO ERROR:", error);
+    return res.status(500).json({ message: "Unable to update combo" });
+  }
+};
+
+export const deleteCombo = async (req: Request, res: Response) => {
+  if (!shouldUseFirestoreAdminCatalog()) {
+    return res.status(400).json({ message: "Combos are available when Firestore catalog is enabled" });
+  }
+
+  const comboId = parsePositiveInt(req.params.id);
+  if (!comboId) {
+    return res.status(400).json({ message: "Invalid combo id" });
+  }
+
+  try {
+    await firestoreCatalogService.deleteCombo(comboId);
+    return res.json({ message: "Combo deleted" });
+  } catch (error) {
+    console.error("DELETE COMBO ERROR:", error);
+    return res.status(500).json({ message: "Unable to delete combo" });
+  }
+};
+
+export const createBanner = async (req: Request, res: Response) => {
+  if (!shouldUseFirestoreAdminCatalog()) {
+    return res.status(400).json({ message: "Banners are available when Firestore catalog is enabled" });
+  }
+
+  const imageUrl = String(req.body?.image_url || "").trim();
+  const caption = String(req.body?.caption || "").trim();
+  const titleTop = String(req.body?.title_top || "").trim();
+  const titleAccent = String(req.body?.title_accent || "").trim();
+  const primaryCta = parseBannerCta(req.body?.primary_cta);
+  const secondaryCta = parseBannerCta(req.body?.secondary_cta);
+  const chips = parseBannerChips(req.body?.chips);
+  const sortOrder =
+    req.body?.sort_order === undefined || req.body?.sort_order === null || String(req.body?.sort_order).trim() === ""
+      ? undefined
+      : parseNonNegativeInt(req.body?.sort_order);
+  const isActive =
+    req.body?.is_active === undefined ? 1 : parseBooleanFlag(req.body?.is_active);
+
+  if (!imageUrl) {
+    return res.status(400).json({ message: "image_url is required" });
+  }
+  if (!caption || !titleTop || !titleAccent) {
+    return res.status(400).json({ message: "caption, title_top and title_accent are required" });
+  }
+  if (!primaryCta) {
+    return res.status(400).json({ message: "Primary button text and link are required" });
+  }
+  if (sortOrder === null) {
+    return res.status(400).json({ message: "Invalid sort_order" });
+  }
+  if (isActive === null) {
+    return res.status(400).json({ message: "Invalid is_active value" });
+  }
+
+  try {
+    const banner = await firestoreCatalogService.upsertBanner({
+      image_url: imageUrl,
+      caption,
+      title_top: titleTop,
+      title_accent: titleAccent,
+      title_bottom: String(req.body?.title_bottom || "").trim() || null,
+      description: String(req.body?.description || "").trim() || null,
+      chips,
+      primary_cta: primaryCta,
+      secondary_cta: secondaryCta,
+      align: String(req.body?.align || "left").trim() === "right" ? "right" : "left",
+      is_active: isActive,
+      sort_order: sortOrder,
+    });
+
+    return res.status(201).json({
+      message: "Banner created",
+      banner: normalizeFirestoreBannerForAdmin(banner),
+    });
+  } catch (error) {
+    console.error("CREATE BANNER ERROR:", error);
+    return res.status(500).json({ message: "Unable to create banner" });
+  }
+};
+
+export const updateBanner = async (req: Request, res: Response) => {
+  if (!shouldUseFirestoreAdminCatalog()) {
+    return res.status(400).json({ message: "Banners are available when Firestore catalog is enabled" });
+  }
+
+  const bannerId = parsePositiveInt(req.params.id);
+  if (!bannerId) {
+    return res.status(400).json({ message: "Invalid banner id" });
+  }
+
+  const imageUrl = String(req.body?.image_url || "").trim();
+  const caption = String(req.body?.caption || "").trim();
+  const titleTop = String(req.body?.title_top || "").trim();
+  const titleAccent = String(req.body?.title_accent || "").trim();
+  const primaryCta = parseBannerCta(req.body?.primary_cta);
+  const secondaryCta = parseBannerCta(req.body?.secondary_cta);
+  const chips = parseBannerChips(req.body?.chips);
+  const sortOrder =
+    req.body?.sort_order === undefined || req.body?.sort_order === null || String(req.body?.sort_order).trim() === ""
+      ? bannerId
+      : parseNonNegativeInt(req.body?.sort_order);
+  const isActive =
+    req.body?.is_active === undefined ? 1 : parseBooleanFlag(req.body?.is_active);
+
+  if (!imageUrl) {
+    return res.status(400).json({ message: "image_url is required" });
+  }
+  if (!caption || !titleTop || !titleAccent) {
+    return res.status(400).json({ message: "caption, title_top and title_accent are required" });
+  }
+  if (!primaryCta) {
+    return res.status(400).json({ message: "Primary button text and link are required" });
+  }
+  if (sortOrder === null) {
+    return res.status(400).json({ message: "Invalid sort_order" });
+  }
+  if (isActive === null) {
+    return res.status(400).json({ message: "Invalid is_active value" });
+  }
+
+  try {
+    const banner = await firestoreCatalogService.upsertBanner({
+      banner_id: bannerId,
+      image_url: imageUrl,
+      caption,
+      title_top: titleTop,
+      title_accent: titleAccent,
+      title_bottom: String(req.body?.title_bottom || "").trim() || null,
+      description: String(req.body?.description || "").trim() || null,
+      chips,
+      primary_cta: primaryCta,
+      secondary_cta: secondaryCta,
+      align: String(req.body?.align || "left").trim() === "right" ? "right" : "left",
+      is_active: isActive,
+      sort_order: sortOrder,
+    });
+
+    return res.json({
+      message: "Banner updated",
+      banner: normalizeFirestoreBannerForAdmin(banner),
+    });
+  } catch (error) {
+    console.error("UPDATE BANNER ERROR:", error);
+    return res.status(500).json({ message: "Unable to update banner" });
+  }
+};
+
+export const deleteBanner = async (req: Request, res: Response) => {
+  if (!shouldUseFirestoreAdminCatalog()) {
+    return res.status(400).json({ message: "Banners are available when Firestore catalog is enabled" });
+  }
+
+  const bannerId = parsePositiveInt(req.params.id);
+  if (!bannerId) {
+    return res.status(400).json({ message: "Invalid banner id" });
+  }
+
+  try {
+    await firestoreCatalogService.deleteBanner(bannerId);
+    return res.json({ message: "Banner deleted" });
+  } catch (error) {
+    console.error("DELETE BANNER ERROR:", error);
+    return res.status(500).json({ message: "Unable to delete banner" });
   }
 };
 
@@ -951,6 +1483,9 @@ const API_CATALOG: ApiCatalogItem[] = [
   { method: "GET", path: "/api/products/category/:categoryId", access: "public" },
   { method: "GET", path: "/api/products/:id", access: "public" },
 
+  { method: "GET", path: "/api/combos", access: "public" },
+  { method: "GET", path: "/api/banners", access: "public" },
+
   { method: "POST", path: "/api/contact", access: "public" },
 
   { method: "GET", path: "/api/reviews/product/:productId", access: "public" },
@@ -986,6 +1521,14 @@ const API_CATALOG: ApiCatalogItem[] = [
   { method: "POST", path: "/api/admin/products", access: "admin" },
   { method: "PUT", path: "/api/admin/products/:id", access: "admin" },
   { method: "DELETE", path: "/api/admin/products/:id", access: "admin" },
+
+  { method: "POST", path: "/api/admin/combos", access: "admin" },
+  { method: "PUT", path: "/api/admin/combos/:id", access: "admin" },
+  { method: "DELETE", path: "/api/admin/combos/:id", access: "admin" },
+
+  { method: "POST", path: "/api/admin/banners", access: "admin" },
+  { method: "PUT", path: "/api/admin/banners/:id", access: "admin" },
+  { method: "DELETE", path: "/api/admin/banners/:id", access: "admin" },
 
   { method: "GET", path: "/api/admin/coupons", access: "admin" },
   { method: "GET", path: "/api/admin/coupons/:id", access: "admin" },

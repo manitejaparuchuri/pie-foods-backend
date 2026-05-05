@@ -14,7 +14,8 @@
     "lint": "eslint . --ext .ts",
     "assets:thumbnails": "ts-node src/scripts/generate-product-thumbnails.ts",
     "r2:sync-assets": "ts-node src/scripts/sync-assets-to-r2.ts",
-    "seed:catalog": "ts-node src/scripts/seed-catalog.ts"
+    "seed:catalog": "ts-node src/scripts/seed-catalog.ts",
+    "firestore:sync-catalog": "ts-node src/scripts/sync-catalog-to-firestore.ts"
   },
   "keywords": [],
   "author": "",
@@ -29,6 +30,7 @@
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "express-rate-limit": "^7.4.1",
+    "firebase-admin": "^13.8.0",
     "google-auth-library": "^10.5.0",
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.3",

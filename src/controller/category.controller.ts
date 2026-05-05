@@ -1,6 +1,8 @@
 import { Request, Response } from "express";
 import db from "../config/db";
 import { getSelectableProductColumns } from "../utils/product-columns";
+import { useFirestoreCatalog } from "../config/catalog";
+import firestoreCatalogService from "../services/catalog-firestore.service";
 
 const parsePositiveInt = (value: string): number | null => {
   const parsed = Number(value);
@@ -12,6 +14,11 @@ const parsePositiveInt = (value: string): number | null => {
 
 export const getAll = async (_req: Request, res: Response) => {
   try {
+    if (useFirestoreCatalog()) {
+      const rows = await firestoreCatalogService.getAllCategories();
+      return res.json(rows);
+    }
+
     const [rows] = await db.query(
       `SELECT category_id, name, description, image_url
        FROM categories
@@ -32,6 +39,15 @@ export const getById = async (req: Request, res: Response) => {
   }
 
   try {
+    if (useFirestoreCatalog()) {
+      const category = await firestoreCatalogService.getCategoryById(categoryId);
+      if (!category) {
+        return res.status(404).json({ message: "Category not found" });
+      }
+
+      return res.json(category);
+    }
+
     const [rows]: any = await db.query(
       `SELECT category_id, name, description, image_url
        FROM categories
@@ -58,6 +74,11 @@ export const getProductsByCategory = async (req: Request, res: Response) => {
   }
 
   try {
+    if (useFirestoreCatalog()) {
+      const rows = await firestoreCatalogService.getProductsByCategory(categoryId);
+      return res.json({ success: true, products: rows });
+    }
+
     const selectColumns = await getSelectableProductColumns("p");
     const [rows] = await db.query(
       `SELECT ${selectColumns.join(", ")}
@@ -76,6 +97,11 @@ export const getProductsByCategory = async (req: Request, res: Response) => {
 
 export const getCategoriesWithProducts = async (_req: Request, res: Response) => {
   try {
+    if (useFirestoreCatalog()) {
+      const rows = await firestoreCatalogService.getCategoriesWithProducts();
+      return res.json(rows);
+    }
+
     const [rows]: any = await db.query(
       `SELECT
         c.category_id,

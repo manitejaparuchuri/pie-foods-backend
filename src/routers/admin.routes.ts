@@ -11,6 +11,12 @@ import {
   createProduct,
   updateProduct,
   deleteProduct,
+  createCombo,
+  updateCombo,
+  deleteCombo,
+  createBanner,
+  updateBanner,
+  deleteBanner,
   createCoupon,
   updateCoupon,
   deleteCoupon,
@@ -41,6 +47,14 @@ router.delete("/categories/:id", deleteCategory);
 router.post("/products", createProduct);
 router.put("/products/:id", updateProduct);
 router.delete("/products/:id", deleteProduct);
+
+router.post("/combos", createCombo);
+router.put("/combos/:id", updateCombo);
+router.delete("/combos/:id", deleteCombo);
+
+router.post("/banners", createBanner);
+router.put("/banners/:id", updateBanner);
+router.delete("/banners/:id", deleteBanner);
 
 router.get("/coupons", getCoupons);
 router.get("/coupons/:id", getCouponById);

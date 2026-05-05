@@ -16,6 +16,8 @@ import paymentRoutes from "./routers/payment.routes";
 import reviewRoutes from "./routers/review.routes";
 import contactRoutes from "./routers/contact.routes";
 import adminRoutes from "./routers/admin.routes";
+import comboRoutes from "./routers/combo.routes";
+import bannerRoutes from "./routers/banner.routes";
 
 const app = express();
 app.disable("x-powered-by");
@@ -149,6 +151,8 @@ app.use("/api/orders", orderRoutes);
 app.use("/api/payment", paymentRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/contact", contactRoutes);
+app.use("/api/combos", comboRoutes);
+app.use("/api/banners", bannerRoutes);
 app.use("/api/admin", adminRoutes);
 
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

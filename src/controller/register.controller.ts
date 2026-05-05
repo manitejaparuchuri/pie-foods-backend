@@ -2,6 +2,8 @@ import { Request, Response } from "express";
 import db from "../config/db";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
+import { useFirebaseAuth } from "../config/auth-provider";
+import { isAuthFlowError, registerWithFirebaseAuth } from "../services/firebase-auth.service";
 
 export const register = async (req: Request, res: Response) => {
   try {
@@ -10,6 +12,28 @@ export const register = async (req: Request, res: Response) => {
 
     if (!name || !normalizedEmail || !password) {
       return res.status(400).json({ message: "name, email, password are required" });
+    }
+
+    if (useFirebaseAuth()) {
+      const user = await registerWithFirebaseAuth({
+        name: String(name || "").trim(),
+        email: normalizedEmail,
+        password: String(password || ""),
+        phone: phone || null,
+        address: address || null,
+      });
+
+      const token = jwt.sign(
+        { id: user.user_id, role: user.role },
+        process.env.JWT_SECRET as string,
+        { expiresIn: "1d" }
+      );
+
+      return res.status(201).json({
+        message: "Registration successful",
+        user,
+        token
+      });
     }
 
     const [existing]: any = await db.query("SELECT user_id FROM users WHERE email = ?", [normalizedEmail]);
@@ -37,6 +61,13 @@ export const register = async (req: Request, res: Response) => {
       token
     });
   } catch (err: any) {
+    if (isAuthFlowError(err)) {
+      return res.status(err.statusCode).json({ message: err.message });
+    }
+
+    if (err?.message === "Email already registered" || err?.code === "auth/email-already-exists") {
+      return res.status(409).json({ message: "Email already registered" });
+    }
     if (err?.code === "ER_DUP_ENTRY") {
       return res.status(409).json({ message: "Email already registered" });
     }
