@@ -48,15 +48,15 @@ FIREBASE_CATEGORIES_COLLECTION=categories
 FIREBASE_PRODUCTS_COLLECTION=products
 ```
 
-You can also use:
+For Railway/hosted deployment, do not use `FIREBASE_SERVICE_ACCOUNT_PATH` unless the JSON file is actually deployed with the app. Prefer these variables:
 
 ```env
-FIREBASE_PROJECT_ID=
-FIREBASE_CLIENT_EMAIL=
-FIREBASE_PRIVATE_KEY=
+FIREBASE_PROJECT_ID=your-firebase-project-id
+FIREBASE_CLIENT_EMAIL=your-admin-sdk-client-email
+FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
 ```
 
-if you want to store credentials directly in env vars instead of a file.
+The backend also supports `FIREBASE_SERVICE_ACCOUNT_JSON` or `FIREBASE_SERVICE_ACCOUNT_BASE64` if your hosting provider makes that easier.
 
 ## 3.1 Enable Firebase Authentication
 
