@@ -1,11 +1,10 @@
 import { Response } from "express";
 import { Timestamp } from "firebase-admin/firestore";
 import { firestore } from "../config/firebase";
-import { getFirestoreProductsCollectionName } from "../config/catalog";
 import { AuthRequest } from "../middlewares/auth";
+import { fetchProductsByIds } from "../services/product-lookup.service";
 
 const usersCollection = firestore.collection("users");
-const productsCollection = firestore.collection(getFirestoreProductsCollectionName());
 
 const cartCollection = (uid: string) =>
   usersCollection.doc(uid).collection("cart");
@@ -18,26 +17,6 @@ const parsePositiveInt = (value: unknown): number | null => {
   return parsed;
 };
 
-interface CartProductSnapshot {
-  name: string;
-  price: number;
-  image_url: string | null;
-}
-
-async function fetchProductSnapshot(productId: number): Promise<CartProductSnapshot | null> {
-  const snap = await productsCollection
-    .where("product_id", "==", productId)
-    .limit(1)
-    .get();
-  if (snap.empty) return null;
-  const data = snap.docs[0].data() as Record<string, unknown>;
-  return {
-    name: String(data.name || ""),
-    price: Number(data.price) || 0,
-    image_url: (data.image_url as string) || null,
-  };
-}
-
 async function getCartRowsForUser(uid: string) {
   const snap = await cartCollection(uid).get();
   if (snap.empty) return [];
@@ -46,12 +25,7 @@ async function getCartRowsForUser(uid: string) {
     .map((doc) => Number(doc.id))
     .filter((id) => Number.isFinite(id) && id > 0);
 
-  const productSnaps = await Promise.all(productIds.map(fetchProductSnapshot));
-  const productMap = new Map<number, CartProductSnapshot>();
-  productIds.forEach((id, idx) => {
-    const snap = productSnaps[idx];
-    if (snap) productMap.set(id, snap);
-  });
+  const productMap = await fetchProductsByIds(productIds);
 
   const rows = snap.docs.map((doc) => {
     const data = doc.data() as Record<string, unknown>;
@@ -147,7 +121,8 @@ export const getCartItemById = async (req: AuthRequest, res: Response) => {
     }
     const data = doc.data() as Record<string, unknown>;
     const productId = Number(doc.id);
-    const product = await fetchProductSnapshot(productId);
+    const productMap = await fetchProductsByIds([productId]);
+    const product = productMap.get(productId);
     const addedAt = data.added_at as Timestamp | undefined;
 
     return res.json({
@@ -180,7 +155,8 @@ export const addCartItem = async (req: AuthRequest, res: Response) => {
   }
 
   try {
-    const product = await fetchProductSnapshot(productId);
+    const productMap = await fetchProductsByIds([productId]);
+    const product = productMap.get(productId);
     if (!product) {
       return res.status(404).json({ message: "Product not found" });
     }

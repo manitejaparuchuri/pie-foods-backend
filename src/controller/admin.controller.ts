@@ -9,6 +9,9 @@ import { isR2Configured, uploadFileToR2 } from "../config/r2";
 import { useFirebaseAuth } from "../config/auth-provider";
 import firestoreCatalogService from "../services/catalog-firestore.service";
 import { isAuthFlowError, loginFirebaseAdmin } from "../services/firebase-auth.service";
+import { bumpCacheVersion } from "../config/cache";
+
+const invalidateCatalog = () => bumpCacheVersion("catalog");
 
 const ADMIN_ENV_UID = "admin:env";
 
@@ -406,6 +409,7 @@ export const createCategory = async (req: Request, res: Response) => {
       description: description || null,
       image_url: imageUrl || null,
     });
+    invalidateCatalog();
     return res.status(201).json({ message: "Category created", category });
   } catch (error) {
     console.error("CREATE CATEGORY ERROR:", error);
@@ -446,7 +450,7 @@ export const updateCategory = async (req: Request, res: Response) => {
       description,
       image_url,
     });
-
+    invalidateCatalog();
     return res.json({ message: "Category updated", category });
   } catch (error) {
     console.error("UPDATE CATEGORY ERROR:", error);
@@ -470,6 +474,7 @@ export const deleteCategory = async (req: Request, res: Response) => {
     }
 
     await firestoreCatalogService.deleteCategory(categoryId);
+    invalidateCatalog();
     return res.json({ message: "Category deleted" });
   } catch (error) {
     console.error("DELETE CATEGORY ERROR:", error);
@@ -548,7 +553,7 @@ export const createProduct = async (req: Request, res: Response) => {
     payload.category_slug = getCategorySlug(category);
 
     const product = await firestoreCatalogService.upsertProduct(payload);
-
+    invalidateCatalog();
     return res.status(201).json({
       message: "Product created",
       product: normalizeFirestoreProductForAdmin(product),
@@ -591,7 +596,7 @@ export const updateProduct = async (req: Request, res: Response) => {
     payload.category_slug = getCategorySlug(category);
 
     const product = await firestoreCatalogService.upsertProduct(payload);
-
+    invalidateCatalog();
     return res.json({
       message: "Product updated",
       product: normalizeFirestoreProductForAdmin(product),
@@ -615,6 +620,7 @@ export const deleteProduct = async (req: Request, res: Response) => {
     }
 
     await firestoreCatalogService.deleteProduct(productId);
+    invalidateCatalog();
     return res.json({ message: "Product deleted" });
   } catch (error) {
     console.error("DELETE PRODUCT ERROR:", error);
@@ -655,6 +661,7 @@ export const createCombo = async (req: Request, res: Response) => {
       sort_order: sortOrder,
     });
 
+    invalidateCatalog();
     return res.status(201).json({
       message: "Combo created",
       combo: normalizeFirestoreComboForAdmin(combo),
@@ -700,6 +707,7 @@ export const updateCombo = async (req: Request, res: Response) => {
       sort_order: sortOrder,
     });
 
+    invalidateCatalog();
     return res.json({
       message: "Combo updated",
       combo: normalizeFirestoreComboForAdmin(combo),
@@ -716,6 +724,7 @@ export const deleteCombo = async (req: Request, res: Response) => {
 
   try {
     await firestoreCatalogService.deleteCombo(comboId);
+    invalidateCatalog();
     return res.json({ message: "Combo deleted" });
   } catch (error) {
     console.error("DELETE COMBO ERROR:", error);
@@ -765,6 +774,7 @@ export const createBanner = async (req: Request, res: Response) => {
       sort_order: sortOrder,
     });
 
+    invalidateCatalog();
     return res.status(201).json({
       message: "Banner created",
       banner: normalizeFirestoreBannerForAdmin(banner),
@@ -819,6 +829,7 @@ export const updateBanner = async (req: Request, res: Response) => {
       sort_order: sortOrder,
     });
 
+    invalidateCatalog();
     return res.json({
       message: "Banner updated",
       banner: normalizeFirestoreBannerForAdmin(banner),
@@ -835,6 +846,7 @@ export const deleteBanner = async (req: Request, res: Response) => {
 
   try {
     await firestoreCatalogService.deleteBanner(bannerId);
+    invalidateCatalog();
     return res.json({ message: "Banner deleted" });
   } catch (error) {
     console.error("DELETE BANNER ERROR:", error);
@@ -862,6 +874,7 @@ export const updatePopularProductsShowcase = async (req: Request, res: Response)
       items,
     });
 
+    invalidateCatalog();
     return res.json({
       message: "Popular products updated",
       popularShowcase: normalizeFirestorePopularShowcaseForAdmin(showcase),

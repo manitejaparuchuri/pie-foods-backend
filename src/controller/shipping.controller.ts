@@ -9,8 +9,6 @@ const usersCollection = firestore.collection("users");
 const addressesCollection = (uid: string) =>
   usersCollection.doc(uid).collection("addresses");
 
-const ROOT_SHIPPING_INDEX = firestore.collection("shippingIndex");
-
 export const addShippingAddress = async (req: AuthRequest, res: Response) => {
   try {
     const uid = req.user?.uid;
@@ -25,7 +23,7 @@ export const addShippingAddress = async (req: AuthRequest, res: Response) => {
     }
 
     const shipping_id = generateShippingId();
-    const data = {
+    await addressesCollection(uid).doc(shipping_id).set({
       shipping_id,
       user_id: uid,
       address: String(address),
@@ -34,13 +32,6 @@ export const addShippingAddress = async (req: AuthRequest, res: Response) => {
       postal_code: String(postal_code),
       country: String(country ?? "India"),
       phone: phone ? String(phone) : null,
-      created_at: Timestamp.now(),
-    };
-
-    await addressesCollection(uid).doc(shipping_id).set(data);
-    await ROOT_SHIPPING_INDEX.doc(shipping_id).set({
-      shipping_id,
-      user_id: uid,
       created_at: Timestamp.now(),
     });
 
@@ -83,13 +74,4 @@ export const getShippingByUser = async (req: AuthRequest, res: Response) => {
     console.error("GET SHIPPING ERROR:", error);
     res.status(500).json({ error: "Failed to load shipping addresses" });
   }
-};
-
-export const getShippingForUser = async (
-  uid: string,
-  shippingId: string
-): Promise<{ shipping_id: string } | null> => {
-  const doc = await addressesCollection(uid).doc(shippingId).get();
-  if (!doc.exists) return null;
-  return { shipping_id: shippingId };
 };

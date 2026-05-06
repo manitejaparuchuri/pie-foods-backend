@@ -1,7 +1,9 @@
 import { Request, Response } from "express";
-
-import { useFirestoreCatalog } from "../config/catalog";
 import firestoreCatalogService from "../services/catalog-firestore.service";
+import { withCache } from "../config/cache";
+
+const FIVE_MIN = 5 * 60 * 1000;
+const PUBLIC_CACHE_HEADER = "public, max-age=60, stale-while-revalidate=300";
 
 const normalizePopularShowcase = (showcase: any) => ({
   section_id: String(showcase.section_id || "main"),
@@ -28,17 +30,17 @@ const normalizePopularShowcase = (showcase: any) => ({
 
 export const getPopularProductShowcase = async (_req: Request, res: Response) => {
   try {
-    if (!useFirestoreCatalog()) {
-      return res.json(null);
-    }
-
-    const showcase = await firestoreCatalogService.getPopularProductShowcase();
+    const showcase = await withCache(
+      "catalog:popular:active",
+      FIVE_MIN,
+      () => firestoreCatalogService.getPopularProductShowcase()
+    );
     const normalized = normalizePopularShowcase(showcase);
+    res.set("Cache-Control", PUBLIC_CACHE_HEADER);
 
     if (!normalized.is_active) {
       return res.json({ ...normalized, items: [] });
     }
-
     return res.json(normalized);
   } catch (error) {
     console.error("GET POPULAR PRODUCTS ERROR:", error);

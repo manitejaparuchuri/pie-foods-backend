@@ -1,7 +1,9 @@
 import { Request, Response } from "express";
-
-import { useFirestoreCatalog } from "../config/catalog";
 import firestoreCatalogService from "../services/catalog-firestore.service";
+import { withCache } from "../config/cache";
+
+const FIVE_MIN = 5 * 60 * 1000;
+const PUBLIC_CACHE_HEADER = "public, max-age=60, stale-while-revalidate=300";
 
 const normalizeBanner = (banner: any) => ({
   banner_id: Number(banner.banner_id),
@@ -22,11 +24,12 @@ const normalizeBanner = (banner: any) => ({
 
 export const getActiveBanners = async (_req: Request, res: Response) => {
   try {
-    if (!useFirestoreCatalog()) {
-      return res.json([]);
-    }
-
-    const banners = await firestoreCatalogService.getActiveBanners();
+    const banners = await withCache(
+      "catalog:banners:active",
+      FIVE_MIN,
+      () => firestoreCatalogService.getActiveBanners()
+    );
+    res.set("Cache-Control", PUBLIC_CACHE_HEADER);
     return res.json(banners.map(normalizeBanner));
   } catch (error) {
     console.error("GET BANNERS ERROR:", error);

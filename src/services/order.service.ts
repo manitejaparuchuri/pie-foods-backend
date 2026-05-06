@@ -1,6 +1,5 @@
 import { Timestamp } from "firebase-admin/firestore";
 import { firestore } from "../config/firebase";
-import { getFirestoreProductsCollectionName } from "../config/catalog";
 import {
   AppliedCoupon,
   consumeCoupon,
@@ -10,10 +9,10 @@ import {
   buildPricedItemsAndSubtotal,
   calculateTotalsFromSubtotal,
 } from "./pricing.service";
+import { fetchProductsByIds } from "./product-lookup.service";
 
 const ordersCollection = firestore.collection("orders");
 const usersCollection = firestore.collection("users");
-const productsCollection = firestore.collection(getFirestoreProductsCollectionName());
 
 interface CreateOrderResult {
   orderId: string;
@@ -54,34 +53,22 @@ interface CartLineForOrder {
   image_url: string | null;
 }
 
-async function fetchProductSummary(productId: number): Promise<{
-  name: string;
-  price: number;
-  image_url: string | null;
-} | null> {
-  const snap = await productsCollection
-    .where("product_id", "==", productId)
-    .limit(1)
-    .get();
-  if (snap.empty) return null;
-  const data = snap.docs[0].data() as Record<string, unknown>;
-  return {
-    name: String(data.name || ""),
-    price: Number(data.price) || 0,
-    image_url: (data.image_url as string) || null,
-  };
-}
-
 async function loadCartLines(uid: string): Promise<CartLineForOrder[]> {
   const cartSnap = await usersCollection.doc(uid).collection("cart").get();
   if (cartSnap.empty) return [];
 
-  const lines = await Promise.all(
-    cartSnap.docs.map(async (doc) => {
+  const productIds = cartSnap.docs
+    .map((doc) => Number(doc.id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+
+  const productMap = await fetchProductsByIds(productIds);
+
+  return cartSnap.docs
+    .map((doc) => {
       const data = doc.data() as Record<string, unknown>;
       const productId = Number(doc.id);
       if (!Number.isFinite(productId) || productId <= 0) return null;
-      const product = await fetchProductSummary(productId);
+      const product = productMap.get(productId);
       if (!product) return null;
       return {
         product_id: productId,
@@ -91,9 +78,7 @@ async function loadCartLines(uid: string): Promise<CartLineForOrder[]> {
         image_url: product.image_url,
       };
     })
-  );
-
-  return lines.filter((line): line is CartLineForOrder => line !== null && line.quantity > 0);
+    .filter((line): line is CartLineForOrder => line !== null && line.quantity > 0);
 }
 
 async function clearUserCart(uid: string): Promise<void> {
