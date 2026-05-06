@@ -1,29 +1,41 @@
 import { Request, Response } from "express";
 import crypto from "crypto";
-import pool from "../config/db";
+import { Timestamp } from "firebase-admin/firestore";
+import { firestore } from "../config/firebase";
 import { AuthRequest } from "../middlewares/auth";
 import {
   createRazorpayOrderService,
   verifyPaymentService,
 } from "../services/payment.service";
 
-export const createPaymentOrder = async (
-  req: AuthRequest,
-  res: Response
-) => {
-  try {
-    const order_id = Number(req.body?.order_id);
-    const userId = req.user?.id;
+const ordersCollection = firestore.collection("orders");
+const paymentsCollection = firestore.collection("payments");
+const webhookEventsCollection = firestore.collection("payment_webhook_events");
+const usersCollection = firestore.collection("users");
 
-    if (!userId) {
+async function clearUserCart(uid: string): Promise<void> {
+  if (!uid) return;
+  const snap = await usersCollection.doc(uid).collection("cart").get();
+  if (snap.empty) return;
+  const batch = firestore.batch();
+  snap.docs.forEach((doc) => batch.delete(doc.ref));
+  await batch.commit();
+}
+
+export const createPaymentOrder = async (req: AuthRequest, res: Response) => {
+  try {
+    const orderId = String(req.body?.order_id || req.body?.orderId || "").trim();
+    const uid = req.user?.uid;
+
+    if (!uid) {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    if (!Number.isInteger(order_id) || order_id <= 0) {
+    if (!orderId) {
       return res.status(400).json({ message: "Invalid order id" });
     }
 
-    const order = await createRazorpayOrderService(order_id, userId);
+    const order = await createRazorpayOrderService(orderId, uid);
 
     return res.json({
       key_id: process.env.RAZORPAY_KEY_ID,
@@ -45,26 +57,24 @@ export const createPaymentOrder = async (
   }
 };
 
-export const verifyPayment = async (
-  req: AuthRequest,
-  res: Response
-) => {
+export const verifyPayment = async (req: AuthRequest, res: Response) => {
   try {
     const {
       razorpay_order_id,
       razorpay_payment_id,
       razorpay_signature,
       order_id: rawOrderId,
+      orderId: rawOrderIdAlt,
     } = req.body;
 
-    const userId = req.user?.id;
-    const order_id = Number(rawOrderId);
+    const uid = req.user?.uid;
+    const orderId = String(rawOrderId || rawOrderIdAlt || "").trim();
 
-    if (!userId) {
+    if (!uid) {
       return res.status(401).json({ message: "Unauthorized" });
     }
 
-    if (!Number.isFinite(order_id) || order_id <= 0) {
+    if (!orderId) {
       return res.status(400).json({ message: "Invalid order id" });
     }
 
@@ -76,8 +86,8 @@ export const verifyPayment = async (
       razorpay_order_id,
       razorpay_payment_id,
       razorpay_signature,
-      order_id,
-      userId
+      orderId,
+      uid
     );
 
     return res.json({ message: "Payment verified successfully" });
@@ -132,12 +142,18 @@ export const razorpayWebhook = async (req: Request, res: Response) => {
     const body = JSON.parse(rawBody.toString());
     const event = body.event;
     const paymentEntity = body?.payload?.payment?.entity;
+    const eventIdExt = String(paymentEntity?.id || `unknown_${Date.now()}`);
 
-    await pool.query(
-      `INSERT INTO payment_webhook_events
-      (provider, event_id_ext, payload, received_at)
-      VALUES ('RAZORPAY', ?, ?, NOW())`,
-      [paymentEntity?.id || "unknown", JSON.stringify(body)]
+    // Idempotently log the webhook event (doc id = razorpay payment id when available).
+    await webhookEventsCollection.doc(eventIdExt).set(
+      {
+        provider: "RAZORPAY",
+        event_id_ext: eventIdExt,
+        event_type: event || null,
+        payload: body,
+        received_at: Timestamp.now(),
+      },
+      { merge: true }
     );
 
     if (event === "payment.captured" && paymentEntity) {
@@ -147,55 +163,74 @@ export const razorpayWebhook = async (req: Request, res: Response) => {
       const currency = String(paymentEntity.currency || "INR").toUpperCase();
       const idempotencyKey = `rzp_webhook_${paymentId}`.slice(0, 64);
 
-      const [orderRows]: any = await pool.query(
-        "SELECT order_id FROM orders WHERE provider_order_id=? LIMIT 1",
-        [razorpayOrderId]
-      );
+      let resolvedOrderId = "";
+      let resolvedUserId = "";
 
-      const orderId = Number(orderRows?.[0]?.order_id || 0);
-      const fallbackOrderId = Number(paymentEntity?.notes?.order_id || 0);
-      const resolvedOrderId =
-        orderId || (Number.isInteger(fallbackOrderId) && fallbackOrderId > 0 ? fallbackOrderId : 0);
+      const orderByProviderSnap = await ordersCollection
+        .where("provider_order_id", "==", razorpayOrderId)
+        .limit(1)
+        .get();
+
+      if (!orderByProviderSnap.empty) {
+        const doc = orderByProviderSnap.docs[0];
+        resolvedOrderId = doc.id;
+        resolvedUserId = String((doc.data() as Record<string, unknown>).user_id || "");
+      } else {
+        const fallbackOrderId = String(paymentEntity?.notes?.order_id || "").trim();
+        if (fallbackOrderId) {
+          const fallbackSnap = await ordersCollection.doc(fallbackOrderId).get();
+          if (fallbackSnap.exists) {
+            resolvedOrderId = fallbackSnap.id;
+            resolvedUserId = String(
+              (fallbackSnap.data() as Record<string, unknown>).user_id || ""
+            );
+          }
+        }
+      }
 
       if (!resolvedOrderId) {
         console.log("No matching order found:", razorpayOrderId);
         return res.status(200).json({ status: "ignored" });
       }
 
-      const [existing]: any = await pool.query(
-        "SELECT payment_id FROM payments WHERE provider_payment_id=?",
-        [paymentId]
-      );
-
-      if (existing.length > 0) {
+      const paymentRef = paymentsCollection.doc(paymentId);
+      const existing = await paymentRef.get();
+      if (existing.exists) {
         console.log("Duplicate webhook ignored:", paymentId);
         return res.status(200).json({ status: "duplicate" });
       }
 
-      const connection = await pool.getConnection();
-      try {
-        await connection.beginTransaction();
+      const orderRef = ordersCollection.doc(resolvedOrderId);
+      await firestore.runTransaction(async (tx) => {
+        const orderSnap = await tx.get(orderRef);
+        if (!orderSnap.exists) return;
+        const order = orderSnap.data() as Record<string, unknown>;
+        if (order.status === "PENDING_PAYMENT") {
+          tx.update(orderRef, {
+            status: "PAID",
+            provider_order_id: razorpayOrderId,
+            updated_at: Timestamp.now(),
+          });
+        }
+        tx.set(paymentRef, {
+          payment_id: paymentId,
+          order_id: resolvedOrderId,
+          user_id: resolvedUserId,
+          provider: "RAZORPAY",
+          provider_order_id: razorpayOrderId,
+          provider_payment_id: paymentId,
+          provider_signature: signature,
+          amount: amountInPaise,
+          currency,
+          status: "SUCCESS",
+          idempotency_key: idempotencyKey,
+          payment_date: Timestamp.now(),
+          updated_at: Timestamp.now(),
+        });
+      });
 
-        await connection.query(
-          "UPDATE orders SET status='PAID' WHERE order_id=? AND status='PENDING_PAYMENT'",
-          [resolvedOrderId]
-        );
-
-        await connection.query(
-          `INSERT INTO payments
-          (order_id, provider, provider_order_id, provider_payment_id, provider_signature, amount, currency, status, idempotency_key, payment_date, updated_at)
-          VALUES (?, 'RAZORPAY', ?, ?, ?, ?, ?, 'SUCCESS', ?, NOW(), NOW())`,
-          [resolvedOrderId, razorpayOrderId, paymentId, signature, amountInPaise, currency, idempotencyKey]
-        );
-
-        await connection.query("DELETE FROM cart_items WHERE user_id = (SELECT user_id FROM orders WHERE order_id = ? LIMIT 1)", [resolvedOrderId]);
-
-        await connection.commit();
-      } catch (txErr) {
-        await connection.rollback();
-        throw txErr;
-      } finally {
-        connection.release();
+      if (resolvedUserId) {
+        await clearUserCart(resolvedUserId);
       }
 
       console.log("Payment saved via webhook:", paymentId);

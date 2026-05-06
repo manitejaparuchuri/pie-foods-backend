@@ -17,6 +17,7 @@ import {
   createBanner,
   updateBanner,
   deleteBanner,
+  updatePopularProductsShowcase,
   createCoupon,
   updateCoupon,
   deleteCoupon,
@@ -55,6 +56,8 @@ router.delete("/combos/:id", deleteCombo);
 router.post("/banners", createBanner);
 router.put("/banners/:id", updateBanner);
 router.delete("/banners/:id", deleteBanner);
+
+router.put("/popular-products", updatePopularProductsShowcase);
 
 router.get("/coupons", getCoupons);
 router.get("/coupons/:id", getCouponById);

@@ -1,86 +1,37 @@
-import { Request, Response } from 'express';
-import pool from '../config/db';
-import { getSelectableProductColumns } from '../utils/product-columns';
-import { useFirestoreCatalog } from '../config/catalog';
-import firestoreCatalogService from '../services/catalog-firestore.service';
+import { Request, Response } from "express";
+import firestoreCatalogService from "../services/catalog-firestore.service";
 
 export const getAll = async (_req: Request, res: Response) => {
   try {
-    if (useFirestoreCatalog()) {
-      const rows = await firestoreCatalogService.getAllProducts();
-      return res.json(rows);
-    }
-
-    const selectColumns = await getSelectableProductColumns("p");
-    const [rows] = await pool.query(
-      `SELECT ${selectColumns.join(", ")}, c.name AS category_name
-       FROM products p
-       LEFT JOIN categories c ON c.category_id = p.category_id
-       ORDER BY p.created_at DESC, p.product_id DESC`
-    );
-
-    res.json(rows);
+    const rows = await firestoreCatalogService.getAllProducts();
+    return res.json(rows);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
 export const getById = async (req: Request, res: Response) => {
   try {
     const productId = Number(req.params.id);
-    if (useFirestoreCatalog()) {
-      const product = await firestoreCatalogService.getProductById(productId);
-      if (!product) {
-        return res.status(404).json({ message: 'Product not found' });
-      }
-
-      return res.json(product);
+    const product = await firestoreCatalogService.getProductById(productId);
+    if (!product) {
+      return res.status(404).json({ message: "Product not found" });
     }
-
-    const selectColumns = await getSelectableProductColumns('p');
-
-    const [rows]: any = await pool.query(
-      `SELECT ${selectColumns.join(", ")}, c.name AS category_name
-       FROM products p
-       LEFT JOIN categories c ON c.category_id = p.category_id
-       WHERE p.product_id = ?`,
-      [productId]
-    );
-
-    if (!rows.length) {
-      return res.status(404).json({ message: 'Product not found' });
-    }
-
-    res.json(rows[0]);
+    return res.json(product);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: "Server error" });
   }
 };
 
 export const getByCategory = async (req: Request, res: Response) => {
   try {
     const categoryId = Number(req.params.categoryId);
-    if (useFirestoreCatalog()) {
-      const rows = await firestoreCatalogService.getProductsByCategory(categoryId);
-      return res.json(rows);
-    }
-
-    const selectColumns = await getSelectableProductColumns('p');
-
-    const [rows] = await pool.query(
-      `SELECT ${selectColumns.join(", ")}, c.name AS category_name
-       FROM products p
-       LEFT JOIN categories c ON c.category_id = p.category_id
-       WHERE p.category_id = ?
-       ORDER BY p.created_at DESC, p.product_id DESC`,
-      [categoryId]
-    );
-
-    res.json(rows);
+    const rows = await firestoreCatalogService.getProductsByCategory(categoryId);
+    return res.json(rows);
   } catch (err) {
     console.error(err);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: "Server error" });
   }
 };

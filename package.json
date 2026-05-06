@@ -13,9 +13,8 @@
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "lint": "eslint . --ext .ts",
     "assets:thumbnails": "ts-node src/scripts/generate-product-thumbnails.ts",
-    "r2:sync-assets": "ts-node src/scripts/sync-assets-to-r2.ts",
-    "seed:catalog": "ts-node src/scripts/seed-catalog.ts",
-    "firestore:sync-catalog": "ts-node src/scripts/sync-catalog-to-firestore.ts"
+    "firestore:migrate": "ts-node src/scripts/migrate-firestore.ts",
+    "firestore:verify": "ts-node src/scripts/verify-firestore-migration.ts"
   },
   "keywords": [],
   "author": "",
@@ -36,7 +35,6 @@
     "jsonwebtoken": "^9.0.3",
     "mime-types": "^3.0.2",
     "multer": "^2.0.2",
-    "mysql2": "^3.16.2",
     "nodemailer": "^8.0.1",
     "razorpay": "^2.9.6",
     "sharp": "^0.34.5"

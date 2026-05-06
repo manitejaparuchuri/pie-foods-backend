@@ -1,15 +1,20 @@
 # Firestore Catalog Setup
 
-This first phase moves only `categories` and `products` to Firestore.
+This phase moves storefront catalog/CMS data to Firestore:
+- `categories`
+- `products`
+- `combos`
+- `banners`
+- `popular_products`
 
 The rest of the backend still uses MySQL for now:
-- auth
 - cart
 - shipping
 - orders
 - payments
 - reviews
-- admin dashboard internals
+- coupons
+- contact/admin dashboard internals
 
 ## 1. Create Firestore
 
@@ -46,6 +51,9 @@ FIREBASE_WEB_API_KEY=your_firebase_web_api_key
 FIREBASE_USERS_COLLECTION=users
 FIREBASE_CATEGORIES_COLLECTION=categories
 FIREBASE_PRODUCTS_COLLECTION=products
+FIREBASE_COMBOS_COLLECTION=combos
+FIREBASE_BANNERS_COLLECTION=banners
+FIREBASE_POPULAR_PRODUCTS_COLLECTION=popular_products
 ```
 
 For Railway/hosted deployment, do not use `FIREBASE_SERVICE_ACCOUNT_PATH` unless the JSON file is actually deployed with the app. Prefer these variables:
@@ -102,6 +110,9 @@ Now these public APIs will read from Firestore:
 - `GET /api/products`
 - `GET /api/products/:id`
 - `GET /api/products/category/:categoryId`
+- `GET /api/combos`
+- `GET /api/banners`
+- `GET /api/popular-products`
 
 Your auth APIs can also use Firebase Auth when `AUTH_PROVIDER=firebase`:
 - `POST /api/auth/register`

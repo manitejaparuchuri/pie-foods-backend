@@ -1,15 +1,13 @@
-import bcrypt from "bcryptjs";
 import axios from "axios";
 import { Timestamp } from "firebase-admin/firestore";
 import { getAuth } from "firebase-admin/auth";
 
-import db from "../config/db";
 import { getEnvValue } from "../config/env";
 import { firestore } from "../config/firebase";
 import { getFirestoreUsersCollectionName } from "../config/auth-provider";
 
 export interface SafeUser {
-  user_id: number;
+  uid: string;
   name: string;
   email: string;
   phone: string | null;
@@ -37,18 +35,8 @@ type RegisterPayload = {
   address?: string | null;
 };
 
-type UserRow = {
-  user_id: number | string;
-  name: string;
-  email: string;
-  phone: string | null;
-  address: string | null;
-  role: string;
-};
-
 type FirestoreUserProfile = {
-  firebase_uid?: string;
-  user_id?: number;
+  uid?: string;
   name?: string;
   email?: string;
   phone?: string | null;
@@ -58,7 +46,7 @@ type FirestoreUserProfile = {
 
 export type FirebaseAdminSession = {
   email: string;
-  firebaseUid: string;
+  uid: string;
   username: string;
   role: "admin";
 };
@@ -73,17 +61,6 @@ export function isAuthFlowError(error: unknown): error is AuthFlowError {
 function normalizeNullableString(value: unknown): string | null {
   const normalized = String(value ?? "").trim();
   return normalized || null;
-}
-
-function toSafeUser(user: UserRow): SafeUser {
-  return {
-    user_id: Number(user.user_id),
-    name: String(user.name || ""),
-    email: String(user.email || ""),
-    phone: user.phone ?? null,
-    address: user.address ?? null,
-    role: String(user.role || "customer"),
-  };
 }
 
 function getFirebaseWebApiKey(): string {
@@ -159,109 +136,50 @@ function mapFirebaseIdentityToolkitError(error: unknown): AuthFlowError {
   return new AuthFlowError("Unable to sign in right now", 500, "FIREBASE_LOGIN_FAILED");
 }
 
-async function ensureFirestoreUserProfile(params: {
-  firebaseUid: string;
-  localUser: SafeUser;
-  authProvider: "password" | "google";
-}): Promise<void> {
-  const { firebaseUid, localUser, authProvider } = params;
-  await usersCollection.doc(firebaseUid).set(
-    {
-      firebase_uid: firebaseUid,
-      user_id: localUser.user_id,
-      name: localUser.name,
-      email: localUser.email,
-      phone: localUser.phone,
-      address: localUser.address,
-      role: localUser.role,
-      auth_provider: authProvider,
-      updated_at: Timestamp.now(),
-      last_login_at: Timestamp.now(),
-      created_at: Timestamp.now(),
-    },
-    { merge: true }
-  );
-}
-
-async function createLocalMirrorUser(params: {
-  name: string;
+async function upsertFirestoreUserProfile(params: {
+  uid: string;
   email: string;
-  phone?: string | null;
-  address?: string | null;
-  role?: string;
-}): Promise<SafeUser> {
-  const placeholderPasswordHash = await bcrypt.hash(
-    `firebase-auth-placeholder:${Date.now()}:${Math.random()}`,
-    10
-  );
-
-  const [result]: any = await db.query(
-    `INSERT INTO users (name, email, password_hash, phone, address, role)
-     VALUES (?, ?, ?, ?, ?, ?)`,
-    [
-      params.name,
-      params.email,
-      placeholderPasswordHash,
-      normalizeNullableString(params.phone),
-      normalizeNullableString(params.address),
-      params.role || "customer",
-    ]
-  );
-
-  return {
-    user_id: Number(result.insertId),
-    name: params.name,
-    email: params.email,
-    phone: normalizeNullableString(params.phone),
-    address: normalizeNullableString(params.address),
-    role: params.role || "customer",
-  };
-}
-
-async function getLocalUserByEmail(email: string): Promise<SafeUser | null> {
-  const [rows]: any = await db.query(
-    `SELECT user_id, name, email, phone, address, role
-     FROM users
-     WHERE email = ?
-     LIMIT 1`,
-    [email]
-  );
-
-  if (!rows.length) {
-    return null;
-  }
-
-  return toSafeUser(rows[0]);
-}
-
-async function buildLocalUserFromFirebase(firebaseUid: string, email: string): Promise<SafeUser> {
-  const [docSnapshot, firebaseUser] = await Promise.all([
-    usersCollection.doc(firebaseUid).get(),
-    auth.getUser(firebaseUid),
-  ]);
-
-  const profile = docSnapshot.exists ? (docSnapshot.data() as FirestoreUserProfile) : {};
-  const name =
-    String(profile?.name || firebaseUser.displayName || email.split("@")[0] || "Customer").trim();
-  const phone = normalizeNullableString(profile?.phone || firebaseUser.phoneNumber);
-  const address = normalizeNullableString(profile?.address);
-  const role = String(profile?.role || "customer");
-
-  const localUser = await createLocalMirrorUser({
-    name,
+  name: string;
+  phone: string | null;
+  address: string | null;
+  role: string;
+  authProvider: "password" | "google";
+  isNew: boolean;
+}): Promise<void> {
+  const { uid, email, name, phone, address, role, authProvider, isNew } = params;
+  const ref = usersCollection.doc(uid);
+  const now = Timestamp.now();
+  const baseData: Record<string, unknown> = {
+    uid,
     email,
+    name,
     phone,
     address,
     role,
-  });
+    auth_provider: authProvider,
+    updated_at: now,
+    last_login_at: now,
+  };
+  if (isNew) {
+    baseData.created_at = now;
+  }
+  await ref.set(baseData, { merge: true });
+}
 
-  await ensureFirestoreUserProfile({
-    firebaseUid,
-    localUser,
-    authProvider: "password",
-  });
+async function readUserProfile(uid: string): Promise<FirestoreUserProfile> {
+  const snap = await usersCollection.doc(uid).get();
+  return snap.exists ? (snap.data() as FirestoreUserProfile) : {};
+}
 
-  return localUser;
+function buildSafeUser(uid: string, profile: FirestoreUserProfile, fallbackEmail: string): SafeUser {
+  return {
+    uid,
+    name: String(profile.name || "").trim() || fallbackEmail.split("@")[0] || "Customer",
+    email: String(profile.email || fallbackEmail || "").trim().toLowerCase(),
+    phone: normalizeNullableString(profile.phone),
+    address: normalizeNullableString(profile.address),
+    role: String(profile.role || "customer"),
+  };
 }
 
 export async function registerWithFirebaseAuth(payload: RegisterPayload): Promise<SafeUser> {
@@ -282,39 +200,27 @@ export async function registerWithFirebaseAuth(payload: RegisterPayload): Promis
     throw mapFirebaseAdminAuthError(error);
   }
 
-  let localUser: SafeUser | null = null;
-
   try {
-    localUser =
-      (await getLocalUserByEmail(email)) ||
-      (await createLocalMirrorUser({
-        name,
-        email,
-        phone,
-        address,
-        role: "customer",
-      }));
-
-    await ensureFirestoreUserProfile({
-      firebaseUid: firebaseUser.uid,
-      localUser,
+    await upsertFirestoreUserProfile({
+      uid: firebaseUser.uid,
+      email,
+      name,
+      phone,
+      address,
+      role: "customer",
       authProvider: "password",
+      isNew: true,
     });
 
-    return localUser;
+    return {
+      uid: firebaseUser.uid,
+      name,
+      email,
+      phone,
+      address,
+      role: "customer",
+    };
   } catch (error) {
-    if ((error as any)?.code === "ER_DUP_ENTRY") {
-      const existingLocalUser = await getLocalUserByEmail(email);
-      if (existingLocalUser) {
-        await ensureFirestoreUserProfile({
-          firebaseUid: firebaseUser.uid,
-          localUser: existingLocalUser,
-          authProvider: "password",
-        });
-        return existingLocalUser;
-      }
-    }
-
     await auth.deleteUser(firebaseUser.uid).catch(() => undefined);
     throw error;
   }
@@ -325,23 +231,27 @@ export async function loginWithFirebaseAuth(emailInput: string, password: string
   const apiKey = getFirebaseWebApiKey();
 
   const response = await signInWithFirebasePassword(email, password, apiKey);
-  const firebaseUid = String(response.data?.localId || "").trim();
-  if (!firebaseUid) {
+  const uid = String(response.data?.localId || "").trim();
+  if (!uid) {
     throw new AuthFlowError("Firebase login failed", 500, "MISSING_FIREBASE_UID");
   }
 
-  let localUser = await getLocalUserByEmail(email);
-  if (!localUser) {
-    localUser = await buildLocalUserFromFirebase(firebaseUid, email);
-  }
+  const existingProfile = await readUserProfile(uid);
+  const isNew = !existingProfile?.email;
 
-  await ensureFirestoreUserProfile({
-    firebaseUid,
-    localUser,
+  await upsertFirestoreUserProfile({
+    uid,
+    email,
+    name: String(existingProfile.name || email.split("@")[0] || "Customer").trim(),
+    phone: normalizeNullableString(existingProfile.phone),
+    address: normalizeNullableString(existingProfile.address),
+    role: String(existingProfile.role || "customer"),
     authProvider: "password",
+    isNew,
   });
 
-  return localUser;
+  const profile = await readUserProfile(uid);
+  return buildSafeUser(uid, profile, email);
 }
 
 async function signInWithFirebasePassword(email: string, password: string, apiKey: string) {
@@ -368,19 +278,16 @@ export async function loginFirebaseAdmin(emailInput: string, password: string): 
   const email = String(emailInput || "").trim().toLowerCase();
   const apiKey = getFirebaseWebApiKey();
   const response = await signInWithFirebasePassword(email, password, apiKey);
-  const firebaseUid = String(response.data?.localId || "").trim();
-  if (!firebaseUid) {
+  const uid = String(response.data?.localId || "").trim();
+  if (!uid) {
     throw new AuthFlowError("Firebase login failed", 500, "MISSING_FIREBASE_UID");
   }
 
-  const [userProfileSnapshot, firebaseUser] = await Promise.all([
-    usersCollection.doc(firebaseUid).get(),
-    auth.getUser(firebaseUid),
+  const [profile, firebaseUser] = await Promise.all([
+    readUserProfile(uid),
+    auth.getUser(uid),
   ]);
 
-  const profile = userProfileSnapshot.exists
-    ? (userProfileSnapshot.data() as FirestoreUserProfile)
-    : {};
   const adminEmails = getConfiguredFirebaseAdminEmails();
   const hasAdminRole =
     String(profile?.role || "").trim().toLowerCase() === "admin" ||
@@ -391,23 +298,20 @@ export async function loginFirebaseAdmin(emailInput: string, password: string): 
     throw new AuthFlowError("Admin access required", 403, "ADMIN_ACCESS_REQUIRED");
   }
 
-  await usersCollection.doc(firebaseUid).set(
-    {
-      firebase_uid: firebaseUid,
-      email,
-      name: profile?.name || firebaseUser.displayName || email.split("@")[0],
-      role: "admin",
-      auth_provider: "password",
-      updated_at: Timestamp.now(),
-      last_login_at: Timestamp.now(),
-      created_at: Timestamp.now(),
-    },
-    { merge: true }
-  );
+  await upsertFirestoreUserProfile({
+    uid,
+    email,
+    name: String(profile?.name || firebaseUser.displayName || email.split("@")[0] || "Admin").trim(),
+    phone: normalizeNullableString(profile?.phone),
+    address: normalizeNullableString(profile?.address),
+    role: "admin",
+    authProvider: "password",
+    isNew: !profile?.email,
+  });
 
   return {
     email,
-    firebaseUid,
+    uid,
     username: String(profile?.name || firebaseUser.displayName || email),
     role: "admin",
   };
@@ -421,29 +325,38 @@ export async function upsertFirestoreUserFromGoogleLogin(params: {
   role?: string;
 }): Promise<SafeUser> {
   const email = String(params.email || "").trim().toLowerCase();
-  const existingLocalUser = await getLocalUserByEmail(email);
+  const name = String(params.name || "").trim() || email.split("@")[0];
+  const phone = normalizeNullableString(params.phone);
+  const address = normalizeNullableString(params.address);
+  const role = String(params.role || "customer");
+
   const firebaseUser = await auth.getUserByEmail(email).catch(async () => {
     return auth.createUser({
       email,
-      displayName: params.name,
+      displayName: name,
     });
   });
 
-  const localUser =
-    existingLocalUser ||
-    (await createLocalMirrorUser({
-      name: params.name,
-      email,
-      phone: params.phone,
-      address: params.address,
-      role: params.role || "customer",
-    }));
+  const existingProfile = await readUserProfile(firebaseUser.uid);
 
-  await ensureFirestoreUserProfile({
-    firebaseUid: firebaseUser.uid,
-    localUser,
+  await upsertFirestoreUserProfile({
+    uid: firebaseUser.uid,
+    email,
+    name,
+    phone: phone || normalizeNullableString(existingProfile.phone),
+    address: address || normalizeNullableString(existingProfile.address),
+    role,
     authProvider: "google",
+    isNew: !existingProfile?.email,
   });
 
-  return localUser;
+  const profile = await readUserProfile(firebaseUser.uid);
+  return buildSafeUser(firebaseUser.uid, profile, email);
+}
+
+export async function getUserProfile(uid: string): Promise<SafeUser | null> {
+  if (!uid) return null;
+  const profile = await readUserProfile(uid);
+  if (!profile?.email && !profile?.uid) return null;
+  return buildSafeUser(uid, profile, String(profile.email || ""));
 }

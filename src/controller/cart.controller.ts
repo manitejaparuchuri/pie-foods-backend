@@ -1,7 +1,14 @@
 import { Response } from "express";
-import { ResultSetHeader } from "mysql2";
-import db from "../config/db";
+import { Timestamp } from "firebase-admin/firestore";
+import { firestore } from "../config/firebase";
+import { getFirestoreProductsCollectionName } from "../config/catalog";
 import { AuthRequest } from "../middlewares/auth";
+
+const usersCollection = firestore.collection("users");
+const productsCollection = firestore.collection(getFirestoreProductsCollectionName());
+
+const cartCollection = (uid: string) =>
+  usersCollection.doc(uid).collection("cart");
 
 const parsePositiveInt = (value: unknown): number | null => {
   const parsed = Number(value);
@@ -11,48 +18,71 @@ const parsePositiveInt = (value: unknown): number | null => {
   return parsed;
 };
 
-const cartSelectQuery = `
-  SELECT
-    c.cart_item_id,
-    c.user_id,
-    c.product_id,
-    c.quantity,
-    c.added_at,
-    p.name,
-    p.price,
-    p.image_url
-  FROM cart_items c
-  JOIN products p ON p.product_id = c.product_id
-`;
+interface CartProductSnapshot {
+  name: string;
+  price: number;
+  image_url: string | null;
+}
 
-const getCartRowsByUser = async (userId: number) => {
-  const [rows] = await db.query(
-    `${cartSelectQuery}
-     WHERE c.user_id = ?
-     ORDER BY c.added_at DESC, c.cart_item_id DESC`,
-    [userId]
-  );
-  return rows;
-};
+async function fetchProductSnapshot(productId: number): Promise<CartProductSnapshot | null> {
+  const snap = await productsCollection
+    .where("product_id", "==", productId)
+    .limit(1)
+    .get();
+  if (snap.empty) return null;
+  const data = snap.docs[0].data() as Record<string, unknown>;
+  return {
+    name: String(data.name || ""),
+    price: Number(data.price) || 0,
+    image_url: (data.image_url as string) || null,
+  };
+}
 
-const canAccessUserCart = (authUser: AuthRequest["user"], targetUserId: number): boolean => {
-  if (!authUser) {
-    return false;
-  }
-  if (authUser.role === "admin") {
-    return true;
-  }
-  return authUser.id === targetUserId;
-};
+async function getCartRowsForUser(uid: string) {
+  const snap = await cartCollection(uid).get();
+  if (snap.empty) return [];
+
+  const productIds = snap.docs
+    .map((doc) => Number(doc.id))
+    .filter((id) => Number.isFinite(id) && id > 0);
+
+  const productSnaps = await Promise.all(productIds.map(fetchProductSnapshot));
+  const productMap = new Map<number, CartProductSnapshot>();
+  productIds.forEach((id, idx) => {
+    const snap = productSnaps[idx];
+    if (snap) productMap.set(id, snap);
+  });
+
+  const rows = snap.docs.map((doc) => {
+    const data = doc.data() as Record<string, unknown>;
+    const productId = Number(doc.id);
+    const product = productMap.get(productId);
+    const addedAt = data.added_at as Timestamp | undefined;
+    return {
+      cart_item_id: doc.id,
+      user_id: uid,
+      product_id: productId,
+      quantity: Number(data.quantity) || 0,
+      added_at: addedAt ? addedAt.toDate().toISOString() : null,
+      added_at_ms: addedAt ? addedAt.toDate().getTime() : 0,
+      name: product?.name || "",
+      price: product?.price || 0,
+      image_url: product?.image_url || null,
+    };
+  });
+
+  rows.sort((a, b) => b.added_at_ms - a.added_at_ms);
+  return rows.map(({ added_at_ms: _ms, ...rest }) => rest);
+}
 
 export const getAllCartItems = async (req: AuthRequest, res: Response) => {
-  const userId = req.user?.id;
-  if (!userId) {
+  const uid = req.user?.uid;
+  if (!uid) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
   try {
-    const rows = await getCartRowsByUser(userId);
+    const rows = await getCartRowsForUser(uid);
     return res.json(rows);
   } catch (error) {
     console.error("GET ALL CART ITEMS ERROR:", error);
@@ -61,13 +91,13 @@ export const getAllCartItems = async (req: AuthRequest, res: Response) => {
 };
 
 export const getcartByUserIdFromToken = async (req: AuthRequest, res: Response) => {
-  const userId = req.user?.id;
-  if (!userId) {
+  const uid = req.user?.uid;
+  if (!uid) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
   try {
-    const rows = await getCartRowsByUser(userId);
+    const rows = await getCartRowsForUser(uid);
     return res.json(rows);
   } catch (error) {
     console.error("GET CART BY TOKEN USER ERROR:", error);
@@ -76,17 +106,22 @@ export const getcartByUserIdFromToken = async (req: AuthRequest, res: Response) 
 };
 
 export const getcartByUserId = async (req: AuthRequest, res: Response) => {
-  const userId = parsePositiveInt(req.params.user_Id);
-  if (!userId) {
+  const targetUid = String(req.params.user_Id || "").trim();
+  if (!targetUid) {
     return res.status(400).json({ message: "Invalid user id" });
   }
 
-  if (!canAccessUserCart(req.user, userId)) {
+  const authUser = req.user;
+  if (!authUser) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  if (authUser.role !== "admin" && authUser.uid !== targetUid) {
     return res.status(403).json({ message: "Forbidden" });
   }
 
   try {
-    const rows = await getCartRowsByUser(userId);
+    const rows = await getCartRowsForUser(targetUid);
     return res.json(rows);
   } catch (error) {
     console.error("GET CART BY USER ID ERROR:", error);
@@ -100,26 +135,31 @@ export const getCartItemById = async (req: AuthRequest, res: Response) => {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
-  const cartItemId = parsePositiveInt(req.params.id);
+  const cartItemId = String(req.params.id || "").trim();
   if (!cartItemId) {
     return res.status(400).json({ message: "Invalid cart item id" });
   }
 
   try {
-    const isAdmin = authUser.role === "admin";
-    const [rows]: any = await db.query(
-      `${cartSelectQuery}
-       WHERE c.cart_item_id = ?
-       ${isAdmin ? "" : "AND c.user_id = ?"}
-       LIMIT 1`,
-      isAdmin ? [cartItemId] : [cartItemId, authUser.id]
-    );
-
-    if (!rows.length) {
+    const doc = await cartCollection(authUser.uid).doc(cartItemId).get();
+    if (!doc.exists) {
       return res.status(404).json({ message: "Cart item not found" });
     }
+    const data = doc.data() as Record<string, unknown>;
+    const productId = Number(doc.id);
+    const product = await fetchProductSnapshot(productId);
+    const addedAt = data.added_at as Timestamp | undefined;
 
-    return res.json(rows[0]);
+    return res.json({
+      cart_item_id: doc.id,
+      user_id: authUser.uid,
+      product_id: productId,
+      quantity: Number(data.quantity) || 0,
+      added_at: addedAt ? addedAt.toDate().toISOString() : null,
+      name: product?.name || "",
+      price: product?.price || 0,
+      image_url: product?.image_url || null,
+    });
   } catch (error) {
     console.error("GET CART ITEM BY ID ERROR:", error);
     return res.status(500).json({ message: "Server error" });
@@ -127,8 +167,8 @@ export const getCartItemById = async (req: AuthRequest, res: Response) => {
 };
 
 export const addCartItem = async (req: AuthRequest, res: Response) => {
-  const userId = req.user?.id;
-  if (!userId) {
+  const uid = req.user?.uid;
+  if (!uid) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
@@ -140,49 +180,34 @@ export const addCartItem = async (req: AuthRequest, res: Response) => {
   }
 
   try {
-    const [productRows]: any = await db.query(
-      "SELECT product_id FROM products WHERE product_id = ? LIMIT 1",
-      [productId]
-    );
-
-    if (!productRows.length) {
+    const product = await fetchProductSnapshot(productId);
+    if (!product) {
       return res.status(404).json({ message: "Product not found" });
     }
 
-    const [existingRows]: any = await db.query(
-      `SELECT cart_item_id, quantity
-       FROM cart_items
-       WHERE user_id = ? AND product_id = ?
-       LIMIT 1`,
-      [userId, productId]
+    const cartItemRef = cartCollection(uid).doc(String(productId));
+    const existing = await cartItemRef.get();
+    const previousQuantity = existing.exists
+      ? Number((existing.data() as Record<string, unknown>).quantity) || 0
+      : 0;
+    const newQuantity = previousQuantity + quantity;
+
+    await cartItemRef.set(
+      {
+        product_id: productId,
+        quantity: newQuantity,
+        added_at: existing.exists
+          ? (existing.data() as Record<string, unknown>).added_at || Timestamp.now()
+          : Timestamp.now(),
+        updated_at: Timestamp.now(),
+      },
+      { merge: true }
     );
 
-    if (existingRows.length) {
-      const existing = existingRows[0];
-      const updatedQuantity = Number(existing.quantity) + quantity;
-
-      await db.query(
-        "UPDATE cart_items SET quantity = ? WHERE cart_item_id = ?",
-        [updatedQuantity, existing.cart_item_id]
-      );
-
-      return res.json({
-        message: "Cart item updated",
-        cart_item_id: existing.cart_item_id,
-        quantity: updatedQuantity,
-      });
-    }
-
-    const [insertResult] = await db.query<ResultSetHeader>(
-      `INSERT INTO cart_items (user_id, product_id, quantity)
-       VALUES (?, ?, ?)`,
-      [userId, productId, quantity]
-    );
-
-    return res.status(201).json({
-      message: "Cart item added",
-      cart_item_id: insertResult.insertId,
-      quantity,
+    return res.status(existing.exists ? 200 : 201).json({
+      message: existing.exists ? "Cart item updated" : "Cart item added",
+      cart_item_id: cartItemRef.id,
+      quantity: newQuantity,
     });
   } catch (error) {
     console.error("ADD CART ITEM ERROR:", error);
@@ -191,12 +216,12 @@ export const addCartItem = async (req: AuthRequest, res: Response) => {
 };
 
 export const updateCartItem = async (req: AuthRequest, res: Response) => {
-  const userId = req.user?.id;
-  if (!userId) {
+  const uid = req.user?.uid;
+  if (!uid) {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
-  const cartItemId = parsePositiveInt(req.params.id);
+  const cartItemId = String(req.params.id || "").trim();
   const quantity = parsePositiveInt(req.body?.quantity);
 
   if (!cartItemId || !quantity) {
@@ -204,14 +229,13 @@ export const updateCartItem = async (req: AuthRequest, res: Response) => {
   }
 
   try {
-    const [result] = await db.query<ResultSetHeader>(
-      "UPDATE cart_items SET quantity = ? WHERE cart_item_id = ? AND user_id = ?",
-      [quantity, cartItemId, userId]
-    );
-
-    if (result.affectedRows === 0) {
+    const ref = cartCollection(uid).doc(cartItemId);
+    const snap = await ref.get();
+    if (!snap.exists) {
       return res.status(404).json({ message: "Cart item not found" });
     }
+
+    await ref.update({ quantity, updated_at: Timestamp.now() });
 
     return res.json({
       message: "Cart item updated",
@@ -230,21 +254,18 @@ export const deleteCartItem = async (req: AuthRequest, res: Response) => {
     return res.status(401).json({ message: "Unauthorized" });
   }
 
-  const cartItemId = parsePositiveInt(req.params.id ?? req.params.cart_item_id);
-  const userIdParam = parsePositiveInt(req.params.user_id);
-  const productIdParam = parsePositiveInt(req.params.product_id);
+  const cartItemId = String(req.params.id ?? req.params.cart_item_id ?? "").trim();
+  const userIdParam = String(req.params.user_id || "").trim();
+  const productIdParam = String(req.params.product_id || "").trim();
 
   try {
     if (cartItemId) {
-      const [result] = await db.query<ResultSetHeader>(
-        "DELETE FROM cart_items WHERE cart_item_id = ? AND user_id = ?",
-        [cartItemId, authUser.id]
-      );
-
-      if (result.affectedRows === 0) {
+      const ref = cartCollection(authUser.uid).doc(cartItemId);
+      const snap = await ref.get();
+      if (!snap.exists) {
         return res.status(404).json({ message: "Cart item not found" });
       }
-
+      await ref.delete();
       return res.json({ message: "Cart item removed" });
     }
 
@@ -252,19 +273,16 @@ export const deleteCartItem = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ message: "Invalid delete parameters" });
     }
 
-    if (!canAccessUserCart(authUser, userIdParam)) {
+    if (authUser.role !== "admin" && authUser.uid !== userIdParam) {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    const [result] = await db.query<ResultSetHeader>(
-      "DELETE FROM cart_items WHERE user_id = ? AND product_id = ?",
-      [userIdParam, productIdParam]
-    );
-
-    if (result.affectedRows === 0) {
+    const ref = cartCollection(userIdParam).doc(productIdParam);
+    const snap = await ref.get();
+    if (!snap.exists) {
       return res.status(404).json({ message: "Cart item not found" });
     }
-
+    await ref.delete();
     return res.json({ message: "Cart item removed" });
   } catch (error) {
     console.error("DELETE CART ITEM ERROR:", error);
@@ -272,3 +290,10 @@ export const deleteCartItem = async (req: AuthRequest, res: Response) => {
   }
 };
 
+export async function clearUserCart(uid: string): Promise<void> {
+  const snap = await cartCollection(uid).get();
+  if (snap.empty) return;
+  const batch = firestore.batch();
+  snap.docs.forEach((doc) => batch.delete(doc.ref));
+  await batch.commit();
+}

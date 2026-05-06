@@ -3,8 +3,9 @@ import jwt from "jsonwebtoken";
 
 export interface AuthRequest extends Request {
   user?: {
-    id: number;
+    uid: string;
     role: string;
+    email?: string;
   };
 }
 
@@ -27,21 +28,18 @@ export const verifyToken = (
       process.env.JWT_SECRET as string
     ) as any;
 
+    const decodedUid = String(decoded?.uid || "").trim();
     const decodedRole = String(decoded?.role || "customer");
-    const decodedId = Number(decoded?.id ?? decoded?.user_id);
-    const isAdminToken = decodedRole === "admin";
+    const decodedEmail = String(decoded?.email || "").trim().toLowerCase();
 
-    if (
-      !Number.isInteger(decodedId) ||
-      (!isAdminToken && decodedId <= 0) ||
-      (isAdminToken && decodedId < 0)
-    ) {
+    if (!decodedUid) {
       return res.status(401).json({ message: "Invalid token payload" });
     }
 
     req.user = {
-      id: decodedId,
+      uid: decodedUid,
       role: decodedRole,
+      email: decodedEmail || undefined,
     };
 
     next();

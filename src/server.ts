@@ -18,18 +18,13 @@ import contactRoutes from "./routers/contact.routes";
 import adminRoutes from "./routers/admin.routes";
 import comboRoutes from "./routers/combo.routes";
 import bannerRoutes from "./routers/banner.routes";
+import popularProductsRoutes from "./routers/popular-products.routes";
 
 const app = express();
 app.disable("x-powered-by");
 
 const requiredEnvVars = [
-  "DB_HOST",
-  "DB_USER",
-  "DB_PASS",
-  "DB_NAME",
   "JWT_SECRET",
-  "ADMIN_ID",
-  "ADMIN_PASSWORD",
   "RAZORPAY_KEY_ID",
   "RAZORPAY_KEY_SECRET",
   "RAZORPAY_WEBHOOK_SECRET",
@@ -153,6 +148,7 @@ app.use("/api/reviews", reviewRoutes);
 app.use("/api/contact", contactRoutes);
 app.use("/api/combos", comboRoutes);
 app.use("/api/banners", bannerRoutes);
+app.use("/api/popular-products", popularProductsRoutes);
 app.use("/api/admin", adminRoutes);
 
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {

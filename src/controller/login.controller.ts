@@ -1,12 +1,7 @@
 import { Request, Response } from "express";
-import db from "../config/db";
 import jwt from "jsonwebtoken";
-import bcrypt from "bcryptjs";
 import { OAuth2Client } from "google-auth-library";
-import crypto from "crypto";
-import { useFirebaseAuth } from "../config/auth-provider";
 import {
-  SafeUser,
   isAuthFlowError,
   loginWithFirebaseAuth,
   upsertFirestoreUserFromGoogleLogin,
@@ -23,14 +18,13 @@ function getAllowedGoogleClientIds(): string[] {
   return fromEnv;
 }
 
-const toSafeUser = (user: any): SafeUser => ({
-  user_id: Number(user.user_id),
-  name: String(user.name || ""),
-  email: String(user.email || ""),
-  phone: user.phone ?? null,
-  address: user.address ?? null,
-  role: String(user.role || "customer"),
-});
+function signSessionToken(uid: string, role: string, email: string): string {
+  return jwt.sign(
+    { uid, role, email },
+    process.env.JWT_SECRET as string,
+    { expiresIn: "1d" }
+  );
+}
 
 export const login = async (req: Request, res: Response) => {
   const { email, password } = req.body;
@@ -40,53 +34,9 @@ export const login = async (req: Request, res: Response) => {
 
   try {
     const normalizedEmail = String(email || "").trim().toLowerCase();
-
-    if (useFirebaseAuth()) {
-      const user = await loginWithFirebaseAuth(normalizedEmail, String(password || ""));
-      const token = jwt.sign(
-        {
-          id: user.user_id,
-          role: user.role
-        },
-        process.env.JWT_SECRET!,
-        { expiresIn: "1d" }
-      );
-
-      return res.json({ message: "Login Successful", token, user });
-    }
-
-    const [rows]: any = await db.query(
-      `SELECT user_id, name, email, phone, address, role, password_hash
-       FROM users
-       WHERE email = ?
-       LIMIT 1`,
-      [normalizedEmail]
-    );
-
-    if (!rows.length) {
-      return res.status(401).json({ message: "Invalid credentials" });
-    }
-
-    const user = rows[0];
-
-    
-    const valid = await bcrypt.compare(password, user.password_hash);
-
-    if (!valid) {
-      return res.status(401).json({ message: "Invalid credentials" });
-    }
-
-    const token = jwt.sign(
-      {
-        id: user.user_id,
-        role: user.role
-      },
-      process.env.JWT_SECRET!,
-      { expiresIn: "1d" }
-    );
-
-    return res.json({ message: "Login Successful", token, user: toSafeUser(user) });
-
+    const user = await loginWithFirebaseAuth(normalizedEmail, String(password || ""));
+    const token = signSessionToken(user.uid, user.role, user.email);
+    return res.json({ message: "Login Successful", token, user });
   } catch (error: any) {
     if (isAuthFlowError(error)) {
       console.error("LOGIN ERROR:", error.errorCode || error.message);
@@ -125,56 +75,13 @@ export const googleLogin = async (req: Request, res: Response) => {
       return res.status(400).json({ message: "Unable to read Google account email" });
     }
 
-    const [existingRows]: any = await db.query(
-      `SELECT user_id, name, email, phone, address, role
-       FROM users
-       WHERE email = ?
-       LIMIT 1`,
-      [email]
-    );
-
-    let user = existingRows[0];
-
-    if (!user) {
-      if (useFirebaseAuth()) {
-        user = await upsertFirestoreUserFromGoogleLogin({
-          email,
-          name,
-        });
-      } else {
-        const randomPassword = crypto.randomBytes(24).toString("hex");
-        const passwordHash = await bcrypt.hash(randomPassword, 10);
-
-        const [insertResult]: any = await db.query(
-          `INSERT INTO users (name, email, password_hash, role)
-           VALUES (?, ?, ?, 'customer')`,
-          [name, email, passwordHash]
-        );
-
-        const [createdRows]: any = await db.query(
-          `SELECT user_id, name, email, phone, address, role
-           FROM users
-           WHERE user_id = ?
-           LIMIT 1`,
-          [insertResult.insertId]
-        );
-        user = createdRows[0];
-      }
-    }
-
-    const jwtToken = jwt.sign(
-      {
-        id: Number(user.user_id),
-        role: String(user.role || "customer")
-      },
-      process.env.JWT_SECRET as string,
-      { expiresIn: "1d" }
-    );
+    const user = await upsertFirestoreUserFromGoogleLogin({ email, name });
+    const jwtToken = signSessionToken(user.uid, user.role, user.email);
 
     return res.json({
       message: "Google login successful",
       token: jwtToken,
-      user: "user_id" in user ? toSafeUser(user) : user
+      user,
     });
   } catch (error: any) {
     console.error("GOOGLE LOGIN ERROR:", error?.message || error);

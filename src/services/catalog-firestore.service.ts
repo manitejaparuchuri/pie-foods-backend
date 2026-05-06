@@ -4,6 +4,7 @@ import {
   getFirestoreBannersCollectionName,
   getFirestoreCategoriesCollectionName,
   getFirestoreCombosCollectionName,
+  getFirestorePopularProductsCollectionName,
   getFirestoreProductsCollectionName,
 } from "../config/catalog";
 import { firestore } from "../config/firebase";
@@ -84,6 +85,29 @@ type BannerRecord = {
   updated_at?: Timestamp | Date | string | null;
 };
 
+type PopularProductItemRecord = {
+  item_id: number;
+  name: string;
+  tagline: string | null;
+  caption: string | null;
+  button_text: string | null;
+  link: string | null;
+  image_url: string | null;
+  is_featured: boolean;
+  is_active: boolean;
+  sort_order: number;
+};
+
+type PopularProductShowcaseRecord = {
+  section_id: string;
+  eyebrow: string;
+  title: string;
+  is_active: boolean;
+  items: PopularProductItemRecord[];
+  created_at?: Timestamp | Date | string | null;
+  updated_at?: Timestamp | Date | string | null;
+};
+
 type CategoryWritePayload = {
   category_id: number;
   name: string;
@@ -149,7 +173,99 @@ type BannerWritePayload = {
   sort_order?: number | string | null;
 };
 
+type PopularProductItemWritePayload = {
+  item_id?: number | string | null;
+  name?: string | null;
+  tagline?: string | null;
+  caption?: string | null;
+  button_text?: string | null;
+  link?: string | null;
+  image_url?: string | null;
+  is_featured?: boolean | number | string | null;
+  is_active?: boolean | number | string | null;
+  sort_order?: number | string | null;
+};
+
+type PopularProductShowcaseWritePayload = {
+  eyebrow?: string | null;
+  title?: string | null;
+  is_active?: boolean | number | string | null;
+  items?: PopularProductItemWritePayload[] | null;
+};
+
 const ALLOWED_BANNER_CHIP_ICONS = new Set(["leaf", "zero", "gi", "fruit", "drop", "sparkle", "box"]);
+const POPULAR_SHOWCASE_DOC_ID = "main";
+
+const DEFAULT_POPULAR_PRODUCT_ITEMS: PopularProductItemRecord[] = [
+  {
+    item_id: 1,
+    name: "Gala Apples",
+    tagline: "Crisp & Sweet",
+    caption: "Best Seller",
+    button_text: "View Gala Apples",
+    link: "/products",
+    image_url: "/assets/images/banner_model_1.png",
+    is_featured: false,
+    is_active: true,
+    sort_order: 10,
+  },
+  {
+    item_id: 2,
+    name: "Golden Mangoes",
+    tagline: "Tropical Bliss",
+    caption: "Best Seller",
+    button_text: "View Golden Mangoes",
+    link: "/products",
+    image_url: "/assets/images/banner_model_2.png",
+    is_featured: false,
+    is_active: true,
+    sort_order: 20,
+  },
+  {
+    item_id: 3,
+    name: "Mixed Berries",
+    tagline: "Antioxidant Power",
+    caption: "Best Seller",
+    button_text: "View Mixed Berries",
+    link: "/products",
+    image_url: "/assets/images/banner_model_3.png",
+    is_featured: false,
+    is_active: true,
+    sort_order: 30,
+  },
+  {
+    item_id: 4,
+    name: "Leafy Spinach",
+    tagline: "Farm Fresh",
+    caption: "Best Seller",
+    button_text: "View Leafy Spinach",
+    link: "/products",
+    image_url: "/assets/images/banner_model_4.png",
+    is_featured: true,
+    is_active: true,
+    sort_order: 40,
+  },
+  {
+    item_id: 5,
+    name: "Zesty Lemons",
+    tagline: "Citrus Kick",
+    caption: "Best Seller",
+    button_text: "View Zesty Lemons",
+    link: "/products",
+    image_url: "/assets/images/banner_model_1.png",
+    is_featured: false,
+    is_active: true,
+    sort_order: 50,
+  },
+];
+
+const DEFAULT_POPULAR_SHOWCASE: PopularProductShowcaseRecord = {
+  section_id: POPULAR_SHOWCASE_DOC_ID,
+  eyebrow: "Curated Selection",
+  title: "Popular Products",
+  is_active: true,
+  items: DEFAULT_POPULAR_PRODUCT_ITEMS,
+};
 
 function normalizeNullableString(value: unknown): string | null {
   const normalized = String(value ?? "").trim();
@@ -364,6 +480,51 @@ function mapBannerRecord(raw: Record<string, unknown>): BannerRecord {
   };
 }
 
+function mapPopularProductItemRecord(raw: Record<string, unknown>, fallbackIndex: number): PopularProductItemRecord {
+  const fallbackId = fallbackIndex + 1;
+  const itemId = normalizeNumber(raw.item_id, fallbackId);
+  const name = String(raw.name ?? "").trim();
+  return {
+    item_id: itemId || fallbackId,
+    name,
+    tagline: normalizeNullableString(raw.tagline),
+    caption: normalizeNullableString(raw.caption) || "Best Seller",
+    button_text: normalizeNullableString(raw.button_text) || (name ? `View ${name}` : "View Product"),
+    link: normalizeNullableString(raw.link) || "/products",
+    image_url: normalizeNullableString(raw.image_url),
+    is_featured: raw.is_featured === undefined ? false : Boolean(raw.is_featured),
+    is_active: raw.is_active === undefined ? true : Boolean(raw.is_active),
+    sort_order: normalizeNumber(raw.sort_order, itemId || fallbackId),
+  };
+}
+
+function mapPopularProductShowcaseRecord(raw: Record<string, unknown>): PopularProductShowcaseRecord {
+  const rawItems = Array.isArray(raw.items) ? raw.items : [];
+  const items = rawItems
+    .map((item, index) =>
+      item && typeof item === "object"
+        ? mapPopularProductItemRecord(item as Record<string, unknown>, index)
+        : null
+    )
+    .filter((item): item is PopularProductItemRecord => Boolean(item));
+
+  return {
+    section_id: String(raw.section_id || POPULAR_SHOWCASE_DOC_ID).trim() || POPULAR_SHOWCASE_DOC_ID,
+    eyebrow: String(raw.eyebrow || DEFAULT_POPULAR_SHOWCASE.eyebrow).trim(),
+    title: String(raw.title || DEFAULT_POPULAR_SHOWCASE.title).trim(),
+    is_active: raw.is_active === undefined ? true : Boolean(raw.is_active),
+    items: sortPopularProductItems(items.length ? items : DEFAULT_POPULAR_PRODUCT_ITEMS),
+    created_at:
+      raw.created_at instanceof Timestamp || raw.created_at instanceof Date || typeof raw.created_at === "string"
+        ? (raw.created_at as Timestamp | Date | string)
+        : null,
+    updated_at:
+      raw.updated_at instanceof Timestamp || raw.updated_at instanceof Date || typeof raw.updated_at === "string"
+        ? (raw.updated_at as Timestamp | Date | string)
+        : null,
+  };
+}
+
 function toFirestoreBoolean(value: unknown, fallback = true): boolean {
   if (value === undefined || value === null || value === "") {
     return fallback;
@@ -424,11 +585,19 @@ function sortBanners(banners: BannerRecord[]): BannerRecord[] {
   });
 }
 
+function sortPopularProductItems(items: PopularProductItemRecord[]): PopularProductItemRecord[] {
+  return [...items].sort((left, right) => {
+    const orderDiff = normalizeNumber(left.sort_order, left.item_id) - normalizeNumber(right.sort_order, right.item_id);
+    return orderDiff || left.item_id - right.item_id;
+  });
+}
+
 class FirestoreCatalogService {
   private readonly categoriesCollection = firestore.collection(getFirestoreCategoriesCollectionName());
   private readonly productsCollection = firestore.collection(getFirestoreProductsCollectionName());
   private readonly combosCollection = firestore.collection(getFirestoreCombosCollectionName());
   private readonly bannersCollection = firestore.collection(getFirestoreBannersCollectionName());
+  private readonly popularProductsCollection = firestore.collection(getFirestorePopularProductsCollectionName());
 
   async getAllCategories(): Promise<CategoryRecord[]> {
     const snapshot = await this.categoriesCollection.get();
@@ -476,6 +645,18 @@ class FirestoreCatalogService {
   async getActiveBanners(): Promise<BannerRecord[]> {
     const snapshot = await this.bannersCollection.where("is_active", "==", true).get();
     return sortBanners(snapshot.docs.map((doc) => mapBannerRecord(doc.data())));
+  }
+
+  async getPopularProductShowcase(): Promise<PopularProductShowcaseRecord> {
+    const snapshot = await this.popularProductsCollection.doc(POPULAR_SHOWCASE_DOC_ID).get();
+    if (!snapshot.exists) {
+      return {
+        ...DEFAULT_POPULAR_SHOWCASE,
+        items: DEFAULT_POPULAR_SHOWCASE.items.map((item) => ({ ...item })),
+      };
+    }
+
+    return mapPopularProductShowcaseRecord(snapshot.data() || {});
   }
 
   async getProductById(productId: number): Promise<ProductRecord | null> {
@@ -699,6 +880,39 @@ class FirestoreCatalogService {
     await this.bannersCollection.doc(`banner-${bannerId}`).delete();
   }
 
+  async upsertPopularProductShowcase(
+    payload: PopularProductShowcaseWritePayload
+  ): Promise<PopularProductShowcaseRecord> {
+    const now = Timestamp.now();
+    const existingSnapshot = await this.popularProductsCollection.doc(POPULAR_SHOWCASE_DOC_ID).get();
+    const existing = existingSnapshot.exists
+      ? mapPopularProductShowcaseRecord(existingSnapshot.data() || {})
+      : null;
+
+    const rawItems = Array.isArray(payload.items) ? payload.items : [];
+    const items = rawItems
+      .map((item, index) => this.normalizePopularProductItemForWrite(item, index))
+      .filter((item): item is PopularProductItemRecord => Boolean(item))
+      .slice(0, 8);
+
+    if (!items.some((item) => item.is_featured) && items.length) {
+      items[0].is_featured = true;
+    }
+
+    const showcaseData: PopularProductShowcaseRecord = {
+      section_id: POPULAR_SHOWCASE_DOC_ID,
+      eyebrow: String(payload.eyebrow || DEFAULT_POPULAR_SHOWCASE.eyebrow).trim() || DEFAULT_POPULAR_SHOWCASE.eyebrow,
+      title: String(payload.title || DEFAULT_POPULAR_SHOWCASE.title).trim() || DEFAULT_POPULAR_SHOWCASE.title,
+      is_active: toFirestoreBoolean(payload.is_active, true),
+      items: sortPopularProductItems(items),
+      created_at: existing?.created_at || now,
+      updated_at: now,
+    };
+
+    await this.popularProductsCollection.doc(POPULAR_SHOWCASE_DOC_ID).set(showcaseData, { merge: true });
+    return mapPopularProductShowcaseRecord(showcaseData as unknown as Record<string, unknown>);
+  }
+
   private async getNextComboId(): Promise<number> {
     const combos = await this.getAllCombos();
     const highestId = combos.reduce((highest, combo) => Math.max(highest, combo.combo_id), 0);
@@ -709,6 +923,52 @@ class FirestoreCatalogService {
     const banners = await this.getAllBanners();
     const highestId = banners.reduce((highest, banner) => Math.max(highest, banner.banner_id), 0);
     return highestId + 1;
+  }
+
+  async getNextCategoryId(): Promise<number> {
+    const categories = await this.getAllCategories();
+    const highestId = categories.reduce(
+      (highest, category) => Math.max(highest, Number(category.category_id) || 0),
+      0
+    );
+    return highestId + 1;
+  }
+
+  async getNextProductId(): Promise<number> {
+    const products = await this.getAllProductsForAdmin();
+    const highestId = products.reduce(
+      (highest, product) => Math.max(highest, Number(product.product_id) || 0),
+      0
+    );
+    return highestId + 1;
+  }
+
+  private normalizePopularProductItemForWrite(
+    item: PopularProductItemWritePayload,
+    index: number
+  ): PopularProductItemRecord | null {
+    const name = String(item?.name || "").trim();
+    const imageUrl = normalizeNullableString(item?.image_url);
+
+    if (!name || !imageUrl) {
+      return null;
+    }
+
+    const fallbackId = index + 1;
+    const itemId = normalizeNumber(item?.item_id, fallbackId) || fallbackId;
+
+    return {
+      item_id: itemId,
+      name,
+      tagline: normalizeNullableString(item?.tagline),
+      caption: normalizeNullableString(item?.caption) || "Best Seller",
+      button_text: normalizeNullableString(item?.button_text) || `View ${name}`,
+      link: normalizeNullableString(item?.link) || "/products",
+      image_url: imageUrl,
+      is_featured: toFirestoreBoolean(item?.is_featured, false),
+      is_active: toFirestoreBoolean(item?.is_active, true),
+      sort_order: normalizeNumber(item?.sort_order, (index + 1) * 10),
+    };
   }
 }
 

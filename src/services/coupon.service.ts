@@ -1,34 +1,35 @@
+import { FieldValue, Timestamp, Transaction } from "firebase-admin/firestore";
+import { firestore } from "../config/firebase";
+
+const couponsCollection = firestore.collection("coupons");
+
 const roundCurrency = (value: number): number =>
   Math.round((value + Number.EPSILON) * 100) / 100;
 
 const toNullableDate = (value: unknown): Date | null => {
-  if (!value) {
-    return null;
-  }
+  if (!value) return null;
+  if (value instanceof Timestamp) return value.toDate();
   const parsed = new Date(String(value));
-  if (Number.isNaN(parsed.getTime())) {
-    return null;
-  }
+  if (Number.isNaN(parsed.getTime())) return null;
   return parsed;
 };
 
-interface CouponRow {
-  coupon_id: number;
+interface CouponDoc {
   code: string;
   discount_type: "PERCENT" | "FIXED";
-  discount_value: number | string;
-  max_discount_amount: number | string | null;
-  min_order_amount: number | string;
-  starts_at: Date | string | null;
-  expires_at: Date | string | null;
+  discount_value: number;
+  max_discount_amount: number | null;
+  min_order_amount: number;
+  starts_at: Timestamp | string | null;
+  expires_at: Timestamp | string | null;
   usage_limit_total: number | null;
   usage_limit_per_user: number | null;
   used_count: number;
-  is_active: number;
+  is_active: boolean;
 }
 
 export interface AppliedCoupon {
-  couponId: number;
+  couponId: string;
   code: string;
   discountAmount: number;
 }
@@ -43,9 +44,13 @@ export const COUPON_ERRORS = {
   LIMIT_USER: "Coupon usage limit reached for this user",
 };
 
+/**
+ * Reads a coupon by code (case-insensitive) inside a transaction.
+ * Returns null if no coupon was requested.
+ */
 export const validateCouponForAmount = async (
-  connection: any,
-  userId: number,
+  tx: Transaction,
+  uid: string,
   subtotalAmount: number,
   rawCouponCode?: unknown
 ): Promise<AppliedCoupon | null> => {
@@ -54,37 +59,18 @@ export const validateCouponForAmount = async (
     return null;
   }
 
-  const [rows]: [CouponRow[], unknown] = await connection.query(
-    `SELECT
-      coupon_id,
-      code,
-      discount_type,
-      discount_value,
-      max_discount_amount,
-      min_order_amount,
-      starts_at,
-      expires_at,
-      usage_limit_total,
-      usage_limit_per_user,
-      used_count,
-      is_active
-     FROM coupons
-     WHERE UPPER(code) = ?
-     LIMIT 1
-     FOR UPDATE`,
-    [couponCode]
-  );
-
-  if (!rows.length) {
+  const couponRef = couponsCollection.doc(couponCode);
+  const couponSnap = await tx.get(couponRef);
+  if (!couponSnap.exists) {
     throw new Error(COUPON_ERRORS.INVALID);
   }
 
-  const coupon = rows[0];
+  const coupon = couponSnap.data() as CouponDoc;
   const now = new Date();
   const startsAt = toNullableDate(coupon.starts_at);
   const expiresAt = toNullableDate(coupon.expires_at);
 
-  if (!Number(coupon.is_active)) {
+  if (!coupon.is_active) {
     throw new Error(COUPON_ERRORS.INACTIVE);
   }
   if (startsAt && startsAt.getTime() > now.getTime()) {
@@ -101,19 +87,19 @@ export const validateCouponForAmount = async (
 
   if (
     coupon.usage_limit_total !== null &&
-    Number(coupon.used_count) >= Number(coupon.usage_limit_total)
+    coupon.usage_limit_total !== undefined &&
+    Number(coupon.used_count || 0) >= Number(coupon.usage_limit_total)
   ) {
     throw new Error(COUPON_ERRORS.LIMIT_REACHED);
   }
 
-  if (coupon.usage_limit_per_user !== null) {
-    const [usageRows]: any = await connection.query(
-      `SELECT COUNT(*) AS usage_count
-       FROM coupon_usages
-       WHERE coupon_id = ? AND user_id = ?`,
-      [coupon.coupon_id, userId]
-    );
-    const usageCount = Number(usageRows?.[0]?.usage_count || 0);
+  if (coupon.usage_limit_per_user !== null && coupon.usage_limit_per_user !== undefined) {
+    const usageQuery = await couponRef
+      .collection("usages")
+      .where("user_id", "==", uid)
+      .count()
+      .get();
+    const usageCount = usageQuery.data().count;
     if (usageCount >= Number(coupon.usage_limit_per_user)) {
       throw new Error(COUPON_ERRORS.LIMIT_USER);
     }
@@ -126,7 +112,11 @@ export const validateCouponForAmount = async (
       ? (subtotalAmount * discountValue) / 100
       : discountValue;
 
-  if (discountType === "PERCENT" && coupon.max_discount_amount !== null) {
+  if (
+    discountType === "PERCENT" &&
+    coupon.max_discount_amount !== null &&
+    coupon.max_discount_amount !== undefined
+  ) {
     const maxDiscountAmount = Number(coupon.max_discount_amount) || 0;
     discountAmount = Math.min(discountAmount, maxDiscountAmount);
   }
@@ -138,35 +128,34 @@ export const validateCouponForAmount = async (
   }
 
   return {
-    couponId: Number(coupon.coupon_id),
-    code: String(coupon.code),
+    couponId: couponCode,
+    code: String(coupon.code || couponCode),
     discountAmount,
   };
 };
 
+/**
+ * Records coupon usage and increments the counter inside the order transaction.
+ */
 export const consumeCoupon = async (
-  connection: any,
-  userId: number,
-  orderId: number,
+  tx: Transaction,
+  uid: string,
+  orderId: string,
   coupon: AppliedCoupon
-) => {
-  await connection.query(
-    `INSERT INTO coupon_usages
-      (coupon_id, user_id, order_id, code_snapshot, discount_amount, redeemed_at)
-     VALUES (?, ?, ?, ?, ?, NOW())`,
-    [coupon.couponId, userId, orderId, coupon.code, coupon.discountAmount]
-  );
+): Promise<void> => {
+  const couponRef = couponsCollection.doc(coupon.couponId);
+  const usageRef = couponRef.collection("usages").doc(`${orderId}`);
 
-  const [updateResult]: any = await connection.query(
-    `UPDATE coupons
-     SET used_count = used_count + 1
-     WHERE coupon_id = ?
-       AND (usage_limit_total IS NULL OR used_count < usage_limit_total)`,
-    [coupon.couponId]
-  );
+  tx.set(usageRef, {
+    coupon_id: coupon.couponId,
+    user_id: uid,
+    order_id: orderId,
+    code_snapshot: coupon.code,
+    discount_amount: coupon.discountAmount,
+    redeemed_at: Timestamp.now(),
+  });
 
-  if (!Number(updateResult?.affectedRows || 0)) {
-    throw new Error(COUPON_ERRORS.LIMIT_REACHED);
-  }
+  tx.update(couponRef, {
+    used_count: FieldValue.increment(1),
+  });
 };
-

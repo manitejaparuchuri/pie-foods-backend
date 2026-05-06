@@ -1,4 +1,6 @@
-import db from "../config/db";
+import { Timestamp } from "firebase-admin/firestore";
+import { firestore } from "../config/firebase";
+import { getFirestoreProductsCollectionName } from "../config/catalog";
 import {
   AppliedCoupon,
   consumeCoupon,
@@ -9,8 +11,12 @@ import {
   calculateTotalsFromSubtotal,
 } from "./pricing.service";
 
+const ordersCollection = firestore.collection("orders");
+const usersCollection = firestore.collection("users");
+const productsCollection = firestore.collection(getFirestoreProductsCollectionName());
+
 interface CreateOrderResult {
-  orderId: number;
+  orderId: string;
   totalAmount: number;
   paymentMethod: PaymentMethod;
   status: string;
@@ -28,8 +34,8 @@ interface OrderHistoryItem {
 }
 
 interface OrderHistory {
-  orderId: number;
-  orderDate: Date | null;
+  orderId: string;
+  orderDate: string | null;
   status: string;
   totalAmount: number;
   subtotalAmount: number;
@@ -40,194 +46,199 @@ interface OrderHistory {
   items: OrderHistoryItem[];
 }
 
-interface OrderHistoryRow {
-  order_id: number;
-  order_date: Date | null;
-  status: string;
-  total_amount: number | string;
-  subtotal_amount: number | string | null;
-  coupon_discount_amount: number | string | null;
-  final_amount: number | string | null;
-  coupon_code: string | null;
-  shipping_id: string;
-  product_id: number | null;
-  product_name: string | null;
+interface CartLineForOrder {
+  product_id: number;
+  quantity: number;
+  price: number;
+  name: string;
   image_url: string | null;
-  quantity: number | string | null;
-  price: number | string | null;
+}
+
+async function fetchProductSummary(productId: number): Promise<{
+  name: string;
+  price: number;
+  image_url: string | null;
+} | null> {
+  const snap = await productsCollection
+    .where("product_id", "==", productId)
+    .limit(1)
+    .get();
+  if (snap.empty) return null;
+  const data = snap.docs[0].data() as Record<string, unknown>;
+  return {
+    name: String(data.name || ""),
+    price: Number(data.price) || 0,
+    image_url: (data.image_url as string) || null,
+  };
+}
+
+async function loadCartLines(uid: string): Promise<CartLineForOrder[]> {
+  const cartSnap = await usersCollection.doc(uid).collection("cart").get();
+  if (cartSnap.empty) return [];
+
+  const lines = await Promise.all(
+    cartSnap.docs.map(async (doc) => {
+      const data = doc.data() as Record<string, unknown>;
+      const productId = Number(doc.id);
+      if (!Number.isFinite(productId) || productId <= 0) return null;
+      const product = await fetchProductSummary(productId);
+      if (!product) return null;
+      return {
+        product_id: productId,
+        quantity: Number(data.quantity) || 0,
+        price: product.price,
+        name: product.name,
+        image_url: product.image_url,
+      };
+    })
+  );
+
+  return lines.filter((line): line is CartLineForOrder => line !== null && line.quantity > 0);
+}
+
+async function clearUserCart(uid: string): Promise<void> {
+  const snap = await usersCollection.doc(uid).collection("cart").get();
+  if (snap.empty) return;
+  const batch = firestore.batch();
+  snap.docs.forEach((doc) => batch.delete(doc.ref));
+  await batch.commit();
 }
 
 class OrderService {
   static async createOrder(
-    userId: number,
+    uid: string,
     shippingId: string,
     paymentMethod: PaymentMethod = "RAZORPAY",
     couponCode?: string
   ): Promise<CreateOrderResult> {
-    const connection = await db.getConnection();
     const normalizedPaymentMethod: PaymentMethod =
       paymentMethod === "COD" ? "COD" : "RAZORPAY";
     const orderStatus = "PENDING_PAYMENT";
 
-    try {
-      await connection.beginTransaction();
+    const shippingRef = usersCollection.doc(uid).collection("addresses").doc(shippingId);
+    const shippingSnap = await shippingRef.get();
+    if (!shippingSnap.exists) {
+      throw new Error("Invalid shipping address");
+    }
 
-     
-      const [shippingRows]: any = await connection.query(
-        `SELECT shipping_id FROM shipping_info WHERE shipping_id = ? AND user_id = ?`,
-        [shippingId, userId]
-      );
+    const cartLines = await loadCartLines(uid);
+    if (cartLines.length === 0) {
+      throw new Error("Cart is empty");
+    }
 
-      if (shippingRows.length === 0) {
-        throw new Error("Invalid shipping address");
-      }
+    const { pricedItems, subtotalPaise } = buildPricedItemsAndSubtotal(
+      cartLines.map((line) => ({
+        productId: line.product_id,
+        quantity: line.quantity,
+        mrpRupees: line.price,
+      }))
+    );
 
-
-      const [cartItems]: any = await connection.query(
-        `SELECT c.product_id, c.quantity, p.price
-         FROM cart_items c
-         JOIN products            p ON p.product_id = c.product_id
-         WHERE c.user_id = ?`,
-        [userId]
-      );
-
-      if (cartItems.length === 0) {
-        throw new Error("Cart is empty");
-      }
-
-      
-      const { pricedItems, subtotalPaise } = buildPricedItemsAndSubtotal(
-        cartItems.map((item: any) => ({
-          productId: Number(item.product_id),
-          quantity: Number(item.quantity) || 0,
-          mrpRupees: Number(item.price) || 0,
-        }))
-      );
-
+    const result = await firestore.runTransaction(async (tx) => {
       const preCouponTotals = calculateTotalsFromSubtotal(subtotalPaise, 0);
       const appliedCoupon: AppliedCoupon | null = await validateCouponForAmount(
-        connection,
-        userId,
+        tx,
+        uid,
         preCouponTotals.subtotalAmount,
         couponCode
       );
-      const totals = calculateTotalsFromSubtotal(subtotalPaise, appliedCoupon?.discountAmount || 0);
-
-      const [orderResult]: any = await connection.query(
-        `INSERT INTO orders
-        (user_id, total_amount, status, shipping_id, coupon_id, coupon_code, subtotal_amount, coupon_discount_amount, final_amount)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          userId,
-          totals.totalAmount,
-          orderStatus,
-          shippingId,
-          appliedCoupon?.couponId || null,
-          appliedCoupon?.code || null,
-          totals.subtotalAmount,
-          totals.couponDiscountAmount,
-          totals.totalAmount,
-        ]
+      const totals = calculateTotalsFromSubtotal(
+        subtotalPaise,
+        appliedCoupon?.discountAmount || 0
       );
 
-      const orderId = orderResult.insertId;
+      const orderRef = ordersCollection.doc();
+      const itemsForStorage = pricedItems.map((priced) => {
+        const cartLine = cartLines.find((line) => line.product_id === priced.product_id);
+        return {
+          product_id: priced.product_id,
+          name: cartLine?.name || "",
+          image_url: cartLine?.image_url || null,
+          quantity: priced.quantity,
+          price: priced.discountedPrice,
+          line_total: priced.lineTotal,
+        };
+      });
 
-      
-      for (const item of pricedItems) {
-        await connection.query(
-          `INSERT INTO order_items (order_id, product_id, quantity, price)
-           VALUES (?, ?, ?, ?)`,
-          [orderId, item.product_id, item.quantity, item.discountedPrice]
-        );
-      }
+      tx.set(orderRef, {
+        order_id: orderRef.id,
+        user_id: uid,
+        status: orderStatus,
+        shipping_id: shippingId,
+        payment_method: normalizedPaymentMethod,
+        provider_order_id: null,
+        coupon_id: appliedCoupon?.couponId || null,
+        coupon_code: appliedCoupon?.code || null,
+        subtotal_amount: totals.subtotalAmount,
+        coupon_discount_amount: totals.couponDiscountAmount,
+        final_amount: totals.totalAmount,
+        total_amount: totals.totalAmount,
+        items: itemsForStorage,
+        order_date: Timestamp.now(),
+        updated_at: Timestamp.now(),
+      });
 
       if (appliedCoupon) {
-        await consumeCoupon(connection, userId, Number(orderId), appliedCoupon);
+        await consumeCoupon(tx, uid, orderRef.id, appliedCoupon);
       }
-
-      if (normalizedPaymentMethod === "COD") {
-        await connection.query("DELETE FROM cart_items WHERE user_id = ?", [userId]);
-      }
-
-      await connection.commit();
 
       return {
-        orderId,
+        orderId: orderRef.id,
         totalAmount: totals.totalAmount,
-        paymentMethod: normalizedPaymentMethod,
-        status: orderStatus,
         coupon: appliedCoupon
           ? { code: appliedCoupon.code, discountAmount: totals.couponDiscountAmount }
           : null,
       };
+    });
 
-    } catch (error) {
-      await connection.rollback();
-      throw error;
-    } finally {
-      connection.release();
+    if (normalizedPaymentMethod === "COD") {
+      await clearUserCart(uid);
     }
+
+    return {
+      orderId: result.orderId,
+      totalAmount: result.totalAmount,
+      paymentMethod: normalizedPaymentMethod,
+      status: orderStatus,
+      coupon: result.coupon,
+    };
   }
 
-  static async getOrdersByUser(userId: number): Promise<OrderHistory[]> {
-    const [rows] = await db.query(
-      `SELECT
-        o.order_id,
-        o.order_date,
-        o.status,
-        o.total_amount,
-        o.subtotal_amount,
-        o.coupon_discount_amount,
-        o.final_amount,
-        o.coupon_code,
-        o.shipping_id,
-        oi.product_id,
-        p.name AS product_name,
-        p.image_url,
-        oi.quantity,
-        oi.price
-      FROM orders o
-      LEFT JOIN order_items oi ON oi.order_id = o.order_id
-      LEFT JOIN products p ON p.product_id = oi.product_id
-      WHERE o.user_id = ?
-      ORDER BY o.order_date DESC, o.order_id DESC`,
-      [userId]
-    ) as [OrderHistoryRow[], unknown];
+  static async getOrdersByUser(uid: string): Promise<OrderHistory[]> {
+    const snap = await ordersCollection.where("user_id", "==", uid).get();
+    const orders: OrderHistory[] = snap.docs.map((doc) => {
+      const data = doc.data() as Record<string, unknown>;
+      const orderDate = data.order_date as Timestamp | undefined;
+      const itemsRaw = Array.isArray(data.items)
+        ? (data.items as Array<Record<string, unknown>>)
+        : [];
+      return {
+        orderId: doc.id,
+        orderDate: orderDate ? orderDate.toDate().toISOString() : null,
+        status: String(data.status || ""),
+        totalAmount: Number(data.total_amount) || 0,
+        subtotalAmount: Number(data.subtotal_amount) || 0,
+        couponDiscountAmount: Number(data.coupon_discount_amount) || 0,
+        finalAmount: Number(data.final_amount) || 0,
+        couponCode: (data.coupon_code as string) || null,
+        shippingId: String(data.shipping_id || ""),
+        items: itemsRaw.map((item) => ({
+          productId: Number(item.product_id) || 0,
+          name: String(item.name || "Product"),
+          imageUrl: (item.image_url as string) || null,
+          quantity: Number(item.quantity) || 0,
+          price: Number(item.price) || 0,
+        })),
+      };
+    });
 
-    const byOrder = new Map<number, OrderHistory>();
-
-    for (const row of rows) {
-      let order = byOrder.get(row.order_id);
-      if (!order) {
-        order = {
-          orderId: row.order_id,
-          orderDate: row.order_date ?? null,
-          status: row.status,
-          totalAmount: Number(row.total_amount) || 0,
-          subtotalAmount: Number(row.subtotal_amount) || 0,
-          couponDiscountAmount: Number(row.coupon_discount_amount) || 0,
-          finalAmount: Number(row.final_amount) || 0,
-          couponCode: row.coupon_code ?? null,
-          shippingId: row.shipping_id,
-          items: []
-        };
-        byOrder.set(row.order_id, order);
-      }
-
-      if (row.product_id) {
-        order.items.push({
-          productId: row.product_id,
-          name: row.product_name ?? "Product",
-          imageUrl: row.image_url ?? null,
-          quantity: Number(row.quantity) || 1,
-          price: Number(row.price) || 0
-        });
-      }
-    }
-
-    return Array.from(byOrder.values());
+    orders.sort((a, b) => {
+      const at = a.orderDate ? new Date(a.orderDate).getTime() : 0;
+      const bt = b.orderDate ? new Date(b.orderDate).getTime() : 0;
+      return bt - at;
+    });
+    return orders;
   }
 }
-
 
 export default OrderService;

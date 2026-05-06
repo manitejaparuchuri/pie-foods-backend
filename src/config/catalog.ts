@@ -26,3 +26,7 @@ export function getFirestoreCombosCollectionName(): string {
 export function getFirestoreBannersCollectionName(): string {
   return getEnvValue("FIREBASE_BANNERS_COLLECTION") || "banners";
 }
+
+export function getFirestorePopularProductsCollectionName(): string {
+  return getEnvValue("FIREBASE_POPULAR_PRODUCTS_COLLECTION") || "popular_products";
+}
