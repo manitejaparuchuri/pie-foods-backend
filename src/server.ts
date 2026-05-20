@@ -22,6 +22,7 @@ import popularProductsRoutes from "./routers/popular-products.routes";
 
 const app = express();
 app.disable("x-powered-by");
+app.set("trust proxy", 1);
 
 const requiredEnvVars = [
   "JWT_SECRET",
