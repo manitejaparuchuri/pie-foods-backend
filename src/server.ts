@@ -48,6 +48,9 @@ console.log("Database config detected:", {
 });
 
 const defaultAllowedOrigins = [
+  "https://piefoods.com",
+  "https://www.piefoods.com",
+  "https://api.piefoods.com",
   "https://lifeionizersindia.com",
   "https://www.lifeionizersindia.com",
   "http://localhost:4200",
