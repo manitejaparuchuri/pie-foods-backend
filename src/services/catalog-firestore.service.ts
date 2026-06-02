@@ -196,6 +196,69 @@ type PopularProductShowcaseWritePayload = {
 const ALLOWED_BANNER_CHIP_ICONS = new Set(["leaf", "zero", "gi", "fruit", "drop", "sparkle", "box"]);
 const POPULAR_SHOWCASE_DOC_ID = "main";
 
+const DEFAULT_BANNERS: BannerRecord[] = [
+  {
+    banner_id: 1,
+    image_url: "/assets/images/banner 2.jpg.jpeg",
+    caption: "SWEETNESS, WITHOUT COMPROMISE",
+    title_top: "Sweetness,",
+    title_accent: "Better Than",
+    title_bottom: "Sugar.",
+    description:
+      "Pure monk fruit sweetener — zero calories, zero glycemic impact, zero guilt. A clean, everyday switch for chai, coffee, and Indian cooking.",
+    chips: [
+      { icon: "zero", label: "Zero Calories" },
+      { icon: "gi", label: "GI = 0" },
+      { icon: "leaf", label: "100% Natural" },
+    ],
+    primary_cta: { text: "Shop Now", link: "/products?category=monk-fruit-sweetener" },
+    secondary_cta: { text: "Know More", link: "/learn#monk-fruit-guide" },
+    align: "left",
+    is_active: true,
+    sort_order: 10,
+  },
+  {
+    banner_id: 2,
+    image_url: "/assets/images/banner 3.jpg.jpeg",
+    caption: "EVERYDAY RITUALS",
+    title_top: "A Drop",
+    title_accent: "of Pure",
+    title_bottom: "Sweetness.",
+    description:
+      "Drop. Stir. Sip. Our monk fruit liquid drops dissolve cleanly into coffee, tea, and everything you love.",
+    chips: [
+      { icon: "drop", label: "Liquid Form" },
+      { icon: "sparkle", label: "Zero Sugar" },
+      { icon: "leaf", label: "Plant-Based" },
+    ],
+    primary_cta: { text: "Shop Now", link: "/products?category=monk-fruit-sweetener" },
+    secondary_cta: { text: "Know More", link: "/learn#monk-fruit-guide" },
+    align: "left",
+    is_active: true,
+    sort_order: 20,
+  },
+  {
+    banner_id: 3,
+    image_url: "/assets/images/banner1.jpg",
+    caption: "100% Real Fruit",
+    title_top: "Real Fruit.",
+    title_accent: "Nothing Else.",
+    title_bottom: null,
+    description:
+      "Freeze-dried to preserve taste, texture, and nutrition — without added sugar or preservatives. Perfect for snacking, breakfast, and on-the-go.",
+    chips: [
+      { icon: "fruit", label: "100% Real Fruit" },
+      { icon: "sparkle", label: "No Added Sugar" },
+      { icon: "leaf", label: "No Preservatives" },
+    ],
+    primary_cta: { text: "Shop Now", link: "/products?category=freeze-dried-fruits" },
+    secondary_cta: { text: "Know More", link: "/learn#freeze-drying-process" },
+    align: "left",
+    is_active: true,
+    sort_order: 30,
+  },
+];
+
 const DEFAULT_POPULAR_PRODUCT_ITEMS: PopularProductItemRecord[] = [
   {
     item_id: 1,
@@ -639,12 +702,49 @@ class FirestoreCatalogService {
 
   async getAllBanners(): Promise<BannerRecord[]> {
     const snapshot = await this.bannersCollection.get();
+    if (snapshot.empty) {
+      return sortBanners(await this.seedDefaultBanners());
+    }
     return sortBanners(snapshot.docs.map((doc) => mapBannerRecord(doc.data())));
   }
 
   async getActiveBanners(): Promise<BannerRecord[]> {
-    const snapshot = await this.bannersCollection.where("is_active", "==", true).get();
-    return sortBanners(snapshot.docs.map((doc) => mapBannerRecord(doc.data())));
+    const all = await this.getAllBanners();
+    return all.filter((banner) => banner.is_active);
+  }
+
+  private async seedDefaultBanners(): Promise<BannerRecord[]> {
+    const now = Timestamp.now();
+    const batch = firestore.batch();
+    const seeded: BannerRecord[] = [];
+
+    for (const banner of DEFAULT_BANNERS) {
+      const titleTop = banner.title_top.trim();
+      const titleAccent = banner.title_accent.trim();
+      const data: Record<string, unknown> = {
+        banner_id: banner.banner_id,
+        slug: slugify(`${titleTop} ${titleAccent}`, `banner-${banner.banner_id}`),
+        image_url: banner.image_url,
+        caption: banner.caption,
+        title_top: titleTop,
+        title_accent: titleAccent,
+        title_bottom: banner.title_bottom,
+        description: banner.description,
+        chips: banner.chips,
+        primary_cta: banner.primary_cta,
+        secondary_cta: banner.secondary_cta,
+        align: banner.align,
+        is_active: banner.is_active,
+        sort_order: banner.sort_order,
+        created_at: now,
+        updated_at: now,
+      };
+      batch.set(this.bannersCollection.doc(`banner-${banner.banner_id}`), data, { merge: true });
+      seeded.push(mapBannerRecord(data));
+    }
+
+    await batch.commit();
+    return seeded;
   }
 
   async getPopularProductShowcase(): Promise<PopularProductShowcaseRecord> {
