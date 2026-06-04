@@ -76,6 +76,7 @@ export const checkout = async (req: AuthRequest, res: Response) => {
         productId: item.product_id,
         quantity: item.quantity,
         mrpRupees: productMap.get(item.product_id)?.price ?? 0,
+        discountPercent: productMap.get(item.product_id)?.discount_percent ?? null,
       }))
     );
 

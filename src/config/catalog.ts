@@ -30,3 +30,7 @@ export function getFirestoreBannersCollectionName(): string {
 export function getFirestorePopularProductsCollectionName(): string {
   return getEnvValue("FIREBASE_POPULAR_PRODUCTS_COLLECTION") || "popular_products";
 }
+
+export function getFirestoreSiteSettingsCollectionName(): string {
+  return getEnvValue("FIREBASE_SITE_SETTINGS_COLLECTION") || "site_settings";
+}

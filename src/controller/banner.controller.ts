@@ -9,6 +9,7 @@ const normalizeBanner = (banner: any) => ({
   banner_id: Number(banner.banner_id),
   slug: banner.slug ?? null,
   image_url: banner.image_url ?? null,
+  mobile_image_url: banner.mobile_image_url ?? null,
   caption: String(banner.caption || ""),
   title_top: String(banner.title_top || ""),
   title_accent: String(banner.title_accent || ""),

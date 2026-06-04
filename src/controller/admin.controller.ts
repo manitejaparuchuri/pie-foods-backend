@@ -7,8 +7,9 @@ import { Timestamp } from "firebase-admin/firestore";
 import { firestore } from "../config/firebase";
 import { isR2Configured, uploadFileToR2 } from "../config/r2";
 import { useFirebaseAuth } from "../config/auth-provider";
+import { AuthRequest } from "../middlewares/auth";
 import firestoreCatalogService from "../services/catalog-firestore.service";
-import { isAuthFlowError, loginFirebaseAdmin } from "../services/firebase-auth.service";
+import { changeFirebaseAdminPassword, isAuthFlowError, loginFirebaseAdmin } from "../services/firebase-auth.service";
 import { bumpCacheVersion } from "../config/cache";
 
 const invalidateCatalog = () => bumpCacheVersion("catalog");
@@ -99,8 +100,6 @@ const getCategorySlug = (category: any): string | null => {
 const normalizeFirestoreCategoryForAdmin = (category: any, productCount = 0) => ({
   category_id: Number(category.category_id),
   name: String(category.name || ""),
-  description: category.description ?? null,
-  image_url: category.image_url ?? null,
   product_count: productCount,
 });
 
@@ -108,8 +107,10 @@ const normalizeFirestoreProductForAdmin = (product: any) => ({
   ...product,
   product_id: Number(product.product_id),
   price: Number(product.price) || 0,
+  discount_percent: Number(product.discount_percent) || 0,
   stock_quantity: Number(product.stock_quantity) || 0,
   category_id: Number(product.category_id) || 0,
+  is_bestseller: product.is_bestseller === true || Number(product.is_bestseller) === 1 ? 1 : 0,
   is_active: product.is_active === false ? 0 : 1,
   created_at: toIsoString(product.created_at),
 });
@@ -134,6 +135,7 @@ const normalizeFirestoreBannerForAdmin = (banner: any) => ({
   banner_id: Number(banner.banner_id),
   slug: banner.slug ?? null,
   image_url: banner.image_url ?? null,
+  mobile_image_url: banner.mobile_image_url ?? null,
   caption: String(banner.caption || ""),
   title_top: String(banner.title_top || ""),
   title_accent: String(banner.title_accent || ""),
@@ -348,16 +350,52 @@ export const adminLogin = async (req: Request, res: Response) => {
   });
 };
 
+export const changeAdminPassword = async (req: AuthRequest, res: Response) => {
+  const currentPassword = String(req.body?.current_password ?? req.body?.old_password ?? "");
+  const newPassword = String(req.body?.new_password ?? "");
+
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ message: "Current and new password are required" });
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ message: "New password must be at least 6 characters" });
+  }
+  if (newPassword === currentPassword) {
+    return res.status(400).json({ message: "New password must be different from the current password" });
+  }
+
+  const uid = req.user?.uid;
+  const email = req.user?.email;
+
+  if (!useFirebaseAuth() || !uid || uid === ADMIN_ENV_UID || !email) {
+    return res.status(400).json({
+      message: "Password changes are not available for this admin account.",
+    });
+  }
+
+  try {
+    await changeFirebaseAdminPassword(email, uid, currentPassword, newPassword);
+    return res.json({ message: "Password updated successfully" });
+  } catch (error) {
+    if (isAuthFlowError(error)) {
+      return res.status(error.statusCode).json({ message: error.message });
+    }
+    console.error("ADMIN CHANGE PASSWORD ERROR:", error);
+    return res.status(500).json({ message: "Unable to update password" });
+  }
+};
+
 /* ============================ BOOTSTRAP ============================ */
 
 export const getAdminBootstrap = async (_req: Request, res: Response) => {
   try {
-    const [categories, products, combos, banners, popularShowcase, couponDocs] = await Promise.all([
+    const [categories, products, combos, banners, popularShowcase, trialPack, couponDocs] = await Promise.all([
       firestoreCatalogService.getAllCategories(),
       firestoreCatalogService.getAllProductsForAdmin(),
       firestoreCatalogService.getAllCombos(),
       firestoreCatalogService.getAllBanners(),
       firestoreCatalogService.getPopularProductShowcase(),
+      firestoreCatalogService.getTrialPack(),
       couponsCollection.get(),
     ]);
 
@@ -380,6 +418,7 @@ export const getAdminBootstrap = async (_req: Request, res: Response) => {
       combos: combos.map(normalizeFirestoreComboForAdmin),
       banners: banners.map(normalizeFirestoreBannerForAdmin),
       popularShowcase: normalizeFirestorePopularShowcaseForAdmin(popularShowcase),
+      trialPack: normalizeFirestoreTrialPackForAdmin(trialPack),
       coupons,
       productImageFields: [...FIRESTORE_PRODUCT_IMAGE_FIELDS],
       supportsProductActive: true,
@@ -394,8 +433,6 @@ export const getAdminBootstrap = async (_req: Request, res: Response) => {
 
 export const createCategory = async (req: Request, res: Response) => {
   const name = String(req.body?.name || "").trim();
-  const description = String(req.body?.description || "").trim();
-  const imageUrl = String(req.body?.image_url || "").trim();
 
   if (!name) {
     return res.status(400).json({ message: "name is required" });
@@ -406,8 +443,6 @@ export const createCategory = async (req: Request, res: Response) => {
     const category = await firestoreCatalogService.upsertCategory({
       category_id: nextId,
       name,
-      description: description || null,
-      image_url: imageUrl || null,
     });
     invalidateCatalog();
     return res.status(201).json({ message: "Category created", category });
@@ -436,19 +471,9 @@ export const updateCategory = async (req: Request, res: Response) => {
       return res.status(400).json({ message: "name cannot be empty" });
     }
 
-    const description = Object.prototype.hasOwnProperty.call(req.body, "description")
-      ? String(req.body?.description || "").trim() || null
-      : existing.description;
-
-    const image_url = Object.prototype.hasOwnProperty.call(req.body, "image_url")
-      ? String(req.body?.image_url || "").trim() || null
-      : existing.image_url;
-
     const category = await firestoreCatalogService.upsertCategory({
       category_id: categoryId,
       name,
-      description,
-      image_url,
     });
     invalidateCatalog();
     return res.json({ message: "Category updated", category });
@@ -503,17 +528,27 @@ const buildProductPayload = (
     name: String(get("name", "") || "").trim(),
     sub_name: get("sub_name") ? String(get("sub_name")).trim() : null,
     description: get("description") ? String(get("description")).trim() : null,
-    details: get("details") ? String(get("details")).trim() : null,
-    specifications: get("specifications") ? String(get("specifications")).trim() : null,
-    counter_details: get("counter_details") ? String(get("counter_details")).trim() : null,
-    warranty_installation: get("warranty_installation")
-      ? String(get("warranty_installation")).trim()
-      : null,
     price: Number(get("price", 0)) || 0,
     stock_quantity: Number(get("stock_quantity", 0)) || 0,
     category_id: Number(get("category_id", 0)) || 0,
     is_active: isActiveRaw === 0 ? false : true,
   };
+
+  if (
+    Object.prototype.hasOwnProperty.call(body, "discount_percent") ||
+    (existing && Object.prototype.hasOwnProperty.call(existing, "discount_percent"))
+  ) {
+    payload.discount_percent = get("discount_percent");
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(body, "is_bestseller") ||
+    (existing && Object.prototype.hasOwnProperty.call(existing, "is_bestseller"))
+  ) {
+    const bestsellerRaw = get("is_bestseller");
+    payload.is_bestseller =
+      bestsellerRaw === true || Number(bestsellerRaw) === 1 || String(bestsellerRaw).toLowerCase() === "true";
+  }
 
   for (let i = 0; i <= 10; i += 1) {
     const key = i === 0 ? "image_url" : `image_url${i}`;
@@ -882,6 +917,50 @@ export const updatePopularProductsShowcase = async (req: Request, res: Response)
   } catch (error) {
     console.error("UPDATE POPULAR PRODUCTS ERROR:", error);
     return res.status(500).json({ message: "Unable to update popular products" });
+  }
+};
+
+/* ============================ TRIAL PACK ============================ */
+
+const normalizeFirestoreTrialPackForAdmin = (trialPack: any) => ({
+  price: Number(trialPack.price) || 0,
+  currency: String(trialPack.currency || "₹"),
+  unit_label: String(trialPack.unit_label || "10 sachets"),
+  pack_label: String(trialPack.pack_label || "trial pack"),
+  cups_label: String(trialPack.cups_label || "10 cups of chai"),
+  is_active: trialPack.is_active === false ? 0 : 1,
+  updated_at: toIsoString(trialPack.updated_at),
+});
+
+export const updateTrialPack = async (req: Request, res: Response) => {
+  const price = Number(req.body?.price);
+  if (!Number.isFinite(price) || price <= 0) {
+    return res.status(400).json({ message: "Price must be a positive number" });
+  }
+
+  const isActive = req.body?.is_active === undefined ? 1 : parseBooleanFlag(req.body?.is_active);
+  if (isActive === null) {
+    return res.status(400).json({ message: "Invalid is_active value" });
+  }
+
+  try {
+    const trialPack = await firestoreCatalogService.upsertTrialPack({
+      price,
+      currency: req.body?.currency,
+      unit_label: req.body?.unit_label,
+      pack_label: req.body?.pack_label,
+      cups_label: req.body?.cups_label,
+      is_active: isActive,
+    });
+
+    invalidateCatalog();
+    return res.json({
+      message: "Trial pack updated",
+      trialPack: normalizeFirestoreTrialPackForAdmin(trialPack),
+    });
+  } catch (error) {
+    console.error("UPDATE TRIAL PACK ERROR:", error);
+    return res.status(500).json({ message: "Unable to update trial pack" });
   }
 };
 

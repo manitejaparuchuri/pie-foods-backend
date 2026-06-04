@@ -7,6 +7,8 @@ export interface ProductSnapshot {
   product_id: number;
   name: string;
   price: number;
+  /** Per-product discount (0..100), or null when the product predates the field. */
+  discount_percent: number | null;
   image_url: string | null;
 }
 
@@ -43,6 +45,10 @@ export async function fetchProductsByIds(
         product_id: productId,
         name: String(data.name || ""),
         price: Number(data.price) || 0,
+        discount_percent:
+          data.discount_percent === undefined || data.discount_percent === null
+            ? null
+            : Number(data.discount_percent),
         image_url: (data.image_url as string) || null,
       });
     }

@@ -41,6 +41,7 @@ async function getCartRowsForUser(uid: string) {
       added_at_ms: addedAt ? addedAt.toDate().getTime() : 0,
       name: product?.name || "",
       price: product?.price || 0,
+      discount_percent: product?.discount_percent ?? null,
       image_url: product?.image_url || null,
     };
   });

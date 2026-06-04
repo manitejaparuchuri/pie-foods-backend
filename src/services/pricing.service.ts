@@ -1,6 +1,6 @@
-const ORDER_DISCOUNT_RATE = Number(process.env.ORDER_DISCOUNT_RATE || 0.2);
-const CGST_RATE = Number(process.env.CGST_RATE || 0.09);
-const SGST_RATE = Number(process.env.SGST_RATE || 0.09);
+export const ORDER_DISCOUNT_RATE = Number(process.env.ORDER_DISCOUNT_RATE || 0.2);
+export const CGST_RATE = Number(process.env.CGST_RATE || 0.09);
+export const SGST_RATE = Number(process.env.SGST_RATE || 0.09);
 
 const toPaise = (rupees: number): number => Math.round((Number(rupees) || 0) * 100);
 const fromPaise = (paise: number): number => Math.round((paise + Number.EPSILON)) / 100;
@@ -9,6 +9,8 @@ export interface PricingInputItem {
   productId: number;
   quantity: number;
   mrpRupees: number;
+  /** Per-product discount (0..100). Falls back to the global ORDER_DISCOUNT_RATE when omitted. */
+  discountPercent?: number | null;
 }
 
 export interface PricedItem {
@@ -39,7 +41,11 @@ export const buildPricedItemsAndSubtotal = (
 ): { pricedItems: PricedItem[]; subtotalPaise: number } => {
   const pricedItems = items.map((item) => {
     const mrpPaise = toPaise(item.mrpRupees);
-    const discountedPricePaise = Math.round(mrpPaise * (1 - ORDER_DISCOUNT_RATE));
+    const rate =
+      item.discountPercent === undefined || item.discountPercent === null
+        ? ORDER_DISCOUNT_RATE
+        : Math.min(Math.max(Number(item.discountPercent) || 0, 0), 90) / 100;
+    const discountedPricePaise = Math.round(mrpPaise * (1 - rate));
     const quantity = Math.max(0, Number(item.quantity) || 0);
     const lineTotalPaise = discountedPricePaise * quantity;
 

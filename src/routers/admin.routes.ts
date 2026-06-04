@@ -1,6 +1,7 @@
 import { Router } from "express";
 import {
   adminLogin,
+  changeAdminPassword,
   createCategory,
   updateCategory,
   deleteCategory,
@@ -18,6 +19,7 @@ import {
   updateBanner,
   deleteBanner,
   updatePopularProductsShowcase,
+  updateTrialPack,
   createCoupon,
   updateCoupon,
   deleteCoupon,
@@ -34,6 +36,8 @@ const router = Router();
 router.post("/login", adminLogin);
 
 router.use(verifyToken, requireAdmin);
+
+router.put("/change-password", changeAdminPassword);
 
 router.get("/bootstrap", getAdminBootstrap);
 router.get("/db/tables", getDbTables);
@@ -58,6 +62,8 @@ router.put("/banners/:id", updateBanner);
 router.delete("/banners/:id", deleteBanner);
 
 router.put("/popular-products", updatePopularProductsShowcase);
+
+router.put("/trial-pack", updateTrialPack);
 
 router.get("/coupons", getCoupons);
 router.get("/coupons/:id", getCouponById);

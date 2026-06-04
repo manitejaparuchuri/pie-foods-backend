@@ -14,7 +14,8 @@
     "lint": "eslint . --ext .ts",
     "assets:thumbnails": "ts-node src/scripts/generate-product-thumbnails.ts",
     "firestore:migrate": "ts-node src/scripts/migrate-firestore.ts",
-    "firestore:verify": "ts-node src/scripts/verify-firestore-migration.ts"
+    "firestore:verify": "ts-node src/scripts/verify-firestore-migration.ts",
+    "firestore:cleanup-fields": "ts-node src/scripts/cleanup-removed-fields.ts"
   },
   "keywords": [],
   "author": "",

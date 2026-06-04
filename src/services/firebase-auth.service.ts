@@ -317,6 +317,43 @@ export async function loginFirebaseAdmin(emailInput: string, password: string): 
   };
 }
 
+export async function changeFirebaseAdminPassword(
+  emailInput: string,
+  uid: string,
+  currentPassword: string,
+  newPassword: string
+): Promise<void> {
+  const email = String(emailInput || "").trim().toLowerCase();
+  if (!email || !uid) {
+    throw new AuthFlowError("Admin session is missing email or uid", 400, "MISSING_ADMIN_IDENTITY");
+  }
+
+  const apiKey = getFirebaseWebApiKey();
+
+  // Verify the current password by re-authenticating against Firebase.
+  try {
+    await signInWithFirebasePassword(email, currentPassword, apiKey);
+  } catch (error) {
+    if (isAuthFlowError(error) && (error.statusCode === 400 || error.statusCode === 401)) {
+      throw new AuthFlowError("Current password is incorrect", 401, "INVALID_CURRENT_PASSWORD");
+    }
+    throw error;
+  }
+
+  try {
+    await auth.updateUser(uid, { password: newPassword });
+  } catch (error: any) {
+    const code = String(error?.code || "");
+    if (code === "auth/invalid-password") {
+      throw new AuthFlowError("New password must be at least 6 characters", 400, "WEAK_PASSWORD");
+    }
+    if (code === "auth/user-not-found") {
+      throw new AuthFlowError("Admin account was not found in Firebase", 404, "ADMIN_NOT_FOUND");
+    }
+    throw error;
+  }
+}
+
 export async function upsertFirestoreUserFromGoogleLogin(params: {
   email: string;
   name: string;

@@ -1,4 +1,4 @@
-import { Timestamp } from "firebase-admin/firestore";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 
 import {
   getFirestoreBannersCollectionName,
@@ -6,15 +6,18 @@ import {
   getFirestoreCombosCollectionName,
   getFirestorePopularProductsCollectionName,
   getFirestoreProductsCollectionName,
+  getFirestoreSiteSettingsCollectionName,
 } from "../config/catalog";
 import { firestore } from "../config/firebase";
+import { ORDER_DISCOUNT_RATE } from "./pricing.service";
+
+/** Discount applied to products that predate the per-product discount field. */
+const DEFAULT_PRODUCT_DISCOUNT_PERCENT = Math.round(ORDER_DISCOUNT_RATE * 100);
 
 type CategoryRecord = {
   category_id: number;
   slug?: string;
   name: string;
-  description: string | null;
-  image_url: string | null;
   sort_order?: number;
 };
 
@@ -24,9 +27,8 @@ type ProductRecord = {
   name: string;
   sub_name?: string | null;
   description?: string | null;
-  details?: string | null;
-  specifications?: string | null;
   price: number;
+  discount_percent: number;
   stock_quantity?: number | null;
   category_id?: number | null;
   category_name?: string | null;
@@ -37,6 +39,7 @@ type ProductRecord = {
   image_url3?: string | null;
   image_url4?: string | null;
   image_url5?: string | null;
+  is_bestseller?: boolean;
   created_at?: Timestamp | Date | string | null;
   updated_at?: Timestamp | Date | string | null;
   is_active?: boolean;
@@ -70,6 +73,7 @@ type BannerRecord = {
   banner_id: number;
   slug?: string;
   image_url: string | null;
+  mobile_image_url?: string | null;
   caption: string;
   title_top: string;
   title_accent: string;
@@ -111,8 +115,6 @@ type PopularProductShowcaseRecord = {
 type CategoryWritePayload = {
   category_id: number;
   name: string;
-  description?: string | null;
-  image_url?: string | null;
   slug?: string | null;
   sort_order?: number | null;
 };
@@ -122,11 +124,8 @@ type ProductWritePayload = {
   name: string;
   sub_name?: string | null;
   description?: string | null;
-  details?: string | null;
-  specifications?: string | null;
-  counter_details?: string | null;
-  warranty_installation?: string | null;
   price: number;
+  discount_percent?: number | string | null;
   stock_quantity?: number | null;
   category_id?: number | null;
   category_name?: string | null;
@@ -142,6 +141,7 @@ type ProductWritePayload = {
   image_url8?: string | null;
   image_url9?: string | null;
   image_url10?: string | null;
+  is_bestseller?: boolean | number | string | null;
   is_active?: boolean | number | null;
   created_at?: Timestamp | Date | string | null;
 };
@@ -191,6 +191,26 @@ type PopularProductShowcaseWritePayload = {
   title?: string | null;
   is_active?: boolean | number | string | null;
   items?: PopularProductItemWritePayload[] | null;
+};
+
+type TrialPackRecord = {
+  price: number;
+  currency: string;
+  unit_label: string;
+  pack_label: string;
+  cups_label: string;
+  is_active: boolean;
+  created_at?: Timestamp | Date | string | null;
+  updated_at?: Timestamp | Date | string | null;
+};
+
+type TrialPackWritePayload = {
+  price?: number | string | null;
+  currency?: string | null;
+  unit_label?: string | null;
+  pack_label?: string | null;
+  cups_label?: string | null;
+  is_active?: boolean | number | string | null;
 };
 
 const ALLOWED_BANNER_CHIP_ICONS = new Set(["leaf", "zero", "gi", "fruit", "drop", "sparkle", "box"]);
@@ -262,60 +282,60 @@ const DEFAULT_BANNERS: BannerRecord[] = [
 const DEFAULT_POPULAR_PRODUCT_ITEMS: PopularProductItemRecord[] = [
   {
     item_id: 1,
-    name: "Gala Apples",
-    tagline: "Crisp & Sweet",
+    name: "Monk Fruit Sweetener",
+    tagline: "Zero Calorie · Zero GI",
     caption: "Best Seller",
-    button_text: "View Gala Apples",
+    button_text: "View Monk Fruit Sweetener",
     link: "/products",
-    image_url: "/assets/images/banner_model_1.png",
-    is_featured: false,
+    image_url: "/assets/images/popular_monk_fruit_sweetener.png",
+    is_featured: true,
     is_active: true,
     sort_order: 10,
   },
   {
     item_id: 2,
-    name: "Golden Mangoes",
-    tagline: "Tropical Bliss",
+    name: "Strawberry Pie Chips",
+    tagline: "Berry-Bright Crunch",
     caption: "Best Seller",
-    button_text: "View Golden Mangoes",
+    button_text: "View Strawberry Pie Chips",
     link: "/products",
-    image_url: "/assets/images/banner_model_2.png",
+    image_url: "/assets/images/popular_strawberry_chips.png",
     is_featured: false,
     is_active: true,
     sort_order: 20,
   },
   {
     item_id: 3,
-    name: "Mixed Berries",
-    tagline: "Antioxidant Power",
+    name: "Pineapple Pie Chips",
+    tagline: "Tropical Crunch",
     caption: "Best Seller",
-    button_text: "View Mixed Berries",
+    button_text: "View Pineapple Pie Chips",
     link: "/products",
-    image_url: "/assets/images/banner_model_3.png",
+    image_url: "/assets/images/popular_pineapple_chips.png",
     is_featured: false,
     is_active: true,
     sort_order: 30,
   },
   {
     item_id: 4,
-    name: "Leafy Spinach",
-    tagline: "Farm Fresh",
+    name: "Mango Pie Chips",
+    tagline: "Sunny Mango Crunch",
     caption: "Best Seller",
-    button_text: "View Leafy Spinach",
+    button_text: "View Mango Pie Chips",
     link: "/products",
-    image_url: "/assets/images/banner_model_4.png",
-    is_featured: true,
+    image_url: "/assets/images/popular_mango_chips.png",
+    is_featured: false,
     is_active: true,
     sort_order: 40,
   },
   {
     item_id: 5,
-    name: "Zesty Lemons",
-    tagline: "Citrus Kick",
-    caption: "Best Seller",
-    button_text: "View Zesty Lemons",
+    name: "Jamun Pie Bites",
+    tagline: "Dark Fruit Crunch",
+    caption: "New Arrival",
+    button_text: "View Jamun Pie Bites",
     link: "/products",
-    image_url: "/assets/images/banner_model_1.png",
+    image_url: "/assets/images/popular_jamun_chips.png",
     is_featured: false,
     is_active: true,
     sort_order: 50,
@@ -328,6 +348,17 @@ const DEFAULT_POPULAR_SHOWCASE: PopularProductShowcaseRecord = {
   title: "Popular Products",
   is_active: true,
   items: DEFAULT_POPULAR_PRODUCT_ITEMS,
+};
+
+const TRIAL_PACK_DOC_ID = "trial_pack";
+
+const DEFAULT_TRIAL_PACK: TrialPackRecord = {
+  price: 99,
+  currency: "₹",
+  unit_label: "10 sachets",
+  pack_label: "trial pack",
+  cups_label: "10 cups of chai",
+  is_active: true,
 };
 
 function normalizeNullableString(value: unknown): string | null {
@@ -453,8 +484,6 @@ function mapCategoryRecord(raw: Record<string, unknown>): CategoryRecord {
     category_id: normalizeNumber(raw.category_id),
     slug: normalizeNullableString(raw.slug) || undefined,
     name: String(raw.name ?? "").trim(),
-    description: normalizeNullableString(raw.description),
-    image_url: normalizeNullableString(raw.image_url),
     sort_order: normalizeNumber(raw.sort_order, normalizeNumber(raw.category_id)),
   };
 }
@@ -466,9 +495,11 @@ function mapProductRecord(raw: Record<string, unknown>): ProductRecord {
     name: String(raw.name ?? "").trim(),
     sub_name: normalizeNullableString(raw.sub_name),
     description: normalizeNullableString(raw.description),
-    details: normalizeNullableString(raw.details),
-    specifications: normalizeNullableString(raw.specifications),
     price: normalizeNumber(raw.price),
+    discount_percent:
+      raw.discount_percent === undefined || raw.discount_percent === null
+        ? DEFAULT_PRODUCT_DISCOUNT_PERCENT
+        : clampNumber(raw.discount_percent, 0, 90, DEFAULT_PRODUCT_DISCOUNT_PERCENT),
     stock_quantity: normalizeNumber(raw.stock_quantity, 0),
     category_id: normalizeNumber(raw.category_id, 0),
     category_name: normalizeNullableString(raw.category_name),
@@ -479,6 +510,7 @@ function mapProductRecord(raw: Record<string, unknown>): ProductRecord {
     image_url3: normalizeNullableString(raw.image_url3),
     image_url4: normalizeNullableString(raw.image_url4),
     image_url5: normalizeNullableString(raw.image_url5),
+    is_bestseller: raw.is_bestseller === true || Number(raw.is_bestseller) === 1,
     created_at:
       raw.created_at instanceof Timestamp || raw.created_at instanceof Date || typeof raw.created_at === "string"
         ? (raw.created_at as Timestamp | Date | string)
@@ -521,6 +553,7 @@ function mapBannerRecord(raw: Record<string, unknown>): BannerRecord {
     banner_id: bannerId,
     slug: normalizeNullableString(raw.slug) || undefined,
     image_url: normalizeNullableString(raw.image_url),
+    mobile_image_url: normalizeNullableString(raw.mobile_image_url),
     caption: String(raw.caption ?? "").trim(),
     title_top: titleTop,
     title_accent: String(raw.title_accent ?? "").trim(),
@@ -577,6 +610,26 @@ function mapPopularProductShowcaseRecord(raw: Record<string, unknown>): PopularP
     title: String(raw.title || DEFAULT_POPULAR_SHOWCASE.title).trim(),
     is_active: raw.is_active === undefined ? true : Boolean(raw.is_active),
     items: sortPopularProductItems(items.length ? items : DEFAULT_POPULAR_PRODUCT_ITEMS),
+    created_at:
+      raw.created_at instanceof Timestamp || raw.created_at instanceof Date || typeof raw.created_at === "string"
+        ? (raw.created_at as Timestamp | Date | string)
+        : null,
+    updated_at:
+      raw.updated_at instanceof Timestamp || raw.updated_at instanceof Date || typeof raw.updated_at === "string"
+        ? (raw.updated_at as Timestamp | Date | string)
+        : null,
+  };
+}
+
+function mapTrialPackRecord(raw: Record<string, unknown>): TrialPackRecord {
+  const price = normalizeNumber(raw.price, DEFAULT_TRIAL_PACK.price);
+  return {
+    price: price > 0 ? price : DEFAULT_TRIAL_PACK.price,
+    currency: String(raw.currency || DEFAULT_TRIAL_PACK.currency).trim() || DEFAULT_TRIAL_PACK.currency,
+    unit_label: String(raw.unit_label || DEFAULT_TRIAL_PACK.unit_label).trim() || DEFAULT_TRIAL_PACK.unit_label,
+    pack_label: String(raw.pack_label || DEFAULT_TRIAL_PACK.pack_label).trim() || DEFAULT_TRIAL_PACK.pack_label,
+    cups_label: String(raw.cups_label || DEFAULT_TRIAL_PACK.cups_label).trim() || DEFAULT_TRIAL_PACK.cups_label,
+    is_active: raw.is_active === undefined ? true : Boolean(raw.is_active),
     created_at:
       raw.created_at instanceof Timestamp || raw.created_at instanceof Date || typeof raw.created_at === "string"
         ? (raw.created_at as Timestamp | Date | string)
@@ -661,6 +714,7 @@ class FirestoreCatalogService {
   private readonly combosCollection = firestore.collection(getFirestoreCombosCollectionName());
   private readonly bannersCollection = firestore.collection(getFirestoreBannersCollectionName());
   private readonly popularProductsCollection = firestore.collection(getFirestorePopularProductsCollectionName());
+  private readonly siteSettingsCollection = firestore.collection(getFirestoreSiteSettingsCollectionName());
 
   async getAllCategories(): Promise<CategoryRecord[]> {
     const snapshot = await this.categoriesCollection.get();
@@ -759,6 +813,37 @@ class FirestoreCatalogService {
     return mapPopularProductShowcaseRecord(snapshot.data() || {});
   }
 
+  async getTrialPack(): Promise<TrialPackRecord> {
+    const snapshot = await this.siteSettingsCollection.doc(TRIAL_PACK_DOC_ID).get();
+    if (!snapshot.exists) {
+      return { ...DEFAULT_TRIAL_PACK };
+    }
+
+    return mapTrialPackRecord(snapshot.data() || {});
+  }
+
+  async upsertTrialPack(payload: TrialPackWritePayload): Promise<TrialPackRecord> {
+    const now = Timestamp.now();
+    const existingSnapshot = await this.siteSettingsCollection.doc(TRIAL_PACK_DOC_ID).get();
+    const existing = existingSnapshot.exists ? mapTrialPackRecord(existingSnapshot.data() || {}) : null;
+
+    const price = normalizeNumber(payload.price, existing?.price ?? DEFAULT_TRIAL_PACK.price);
+
+    const trialPackData: Record<string, unknown> = {
+      price: price > 0 ? price : DEFAULT_TRIAL_PACK.price,
+      currency: String(payload.currency || existing?.currency || DEFAULT_TRIAL_PACK.currency).trim() || DEFAULT_TRIAL_PACK.currency,
+      unit_label: String(payload.unit_label || existing?.unit_label || DEFAULT_TRIAL_PACK.unit_label).trim() || DEFAULT_TRIAL_PACK.unit_label,
+      pack_label: String(payload.pack_label || existing?.pack_label || DEFAULT_TRIAL_PACK.pack_label).trim() || DEFAULT_TRIAL_PACK.pack_label,
+      cups_label: String(payload.cups_label || existing?.cups_label || DEFAULT_TRIAL_PACK.cups_label).trim() || DEFAULT_TRIAL_PACK.cups_label,
+      is_active: toFirestoreBoolean(payload.is_active, existing?.is_active ?? true),
+      created_at: existing?.created_at || now,
+      updated_at: now,
+    };
+
+    await this.siteSettingsCollection.doc(TRIAL_PACK_DOC_ID).set(trialPackData, { merge: true });
+    return mapTrialPackRecord(trialPackData);
+  }
+
   async getProductById(productId: number): Promise<ProductRecord | null> {
     const snapshot = await this.productsCollection
       .where("product_id", "==", productId)
@@ -786,8 +871,6 @@ class FirestoreCatalogService {
       category_id: number;
       slug?: string;
       name: string;
-      description: string | null;
-      image_url: string | null;
       products: Array<{
         product_id: number;
         name: string;
@@ -807,8 +890,6 @@ class FirestoreCatalogService {
         category_id: number;
         slug?: string;
         name: string;
-        description: string | null;
-        image_url: string | null;
         products: Array<{
           product_id: number;
           name: string;
@@ -823,8 +904,6 @@ class FirestoreCatalogService {
         category_id: category.category_id,
         slug: category.slug,
         name: category.name,
-        description: category.description,
-        image_url: category.image_url,
         products: [],
       });
     }
@@ -851,14 +930,15 @@ class FirestoreCatalogService {
       category_id: normalizeNumber(payload.category_id),
       slug: normalizeNullableString(payload.slug) || slugify(payload.name, `category-${payload.category_id}`),
       name: String(payload.name || "").trim(),
-      description: normalizeNullableString(payload.description),
-      image_url: normalizeNullableString(payload.image_url),
       sort_order: normalizeNumber(payload.sort_order, normalizeNumber(payload.category_id)),
     };
 
     await this.categoriesCollection.doc(`category-${category.category_id}`).set(
       {
         ...category,
+        // Strip retired fields from existing docs on save.
+        description: FieldValue.delete(),
+        image_url: FieldValue.delete(),
         updated_at: Timestamp.now(),
       },
       { merge: true }
@@ -883,11 +963,16 @@ class FirestoreCatalogService {
       name: String(payload.name || "").trim(),
       sub_name: normalizeNullableString(payload.sub_name),
       description: normalizeNullableString(payload.description),
-      details: normalizeNullableString(payload.details),
-      specifications: normalizeNullableString(payload.specifications),
-      counter_details: normalizeNullableString(payload.counter_details),
-      warranty_installation: normalizeNullableString(payload.warranty_installation),
+      // Strip retired fields from existing docs on save.
+      details: FieldValue.delete(),
+      specifications: FieldValue.delete(),
+      counter_details: FieldValue.delete(),
+      warranty_installation: FieldValue.delete(),
       price: normalizeNumber(payload.price),
+      discount_percent:
+        payload.discount_percent === undefined || payload.discount_percent === null
+          ? existingProduct?.discount_percent ?? DEFAULT_PRODUCT_DISCOUNT_PERCENT
+          : clampNumber(payload.discount_percent, 0, 90, DEFAULT_PRODUCT_DISCOUNT_PERCENT),
       stock_quantity: normalizeNumber(payload.stock_quantity, 0),
       category_id: categoryId,
       category_name: normalizeNullableString(payload.category_name) || category?.name || null,
@@ -903,6 +988,7 @@ class FirestoreCatalogService {
       image_url8: normalizeNullableString(payload.image_url8),
       image_url9: normalizeNullableString(payload.image_url9),
       image_url10: normalizeNullableString(payload.image_url10),
+      is_bestseller: toFirestoreBoolean(payload.is_bestseller, existingProduct?.is_bestseller ?? false),
       is_active: toFirestoreBoolean(payload.is_active, true),
       created_at: existingProduct?.created_at || toFirestoreDate(payload.created_at),
       updated_at: Timestamp.now(),

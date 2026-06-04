@@ -2,13 +2,7 @@ import { Request, Response } from "express";
 import axios from "axios";
 import nodemailer from "nodemailer";
 
-const REQUIRED_FIELDS: Array<keyof ContactPayload> = [
-  "name",
-  "email",
-  "phone",
-  "subject",
-  "message",
-];
+const REQUIRED_FIELDS = ["name", "email", "message"] as const;
 
 type ContactPayload = {
   name: string;
@@ -81,8 +75,8 @@ ${payload.message.trim()}
 <div style="margin:0;padding:24px;background:#f3f7fa;font-family:Arial,Helvetica,sans-serif;color:#1f2937;">
   <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
     <tr>
-      <td style="background:#00b7bb;padding:20px 24px;color:#ffffff;">
-        <div style="font-size:22px;font-weight:700;letter-spacing:0.2px;">Life Ionizers</div>
+      <td style="background:#2f3b2d;padding:20px 24px;color:#ffffff;">
+        <div style="font-size:22px;font-weight:700;letter-spacing:0.2px;">PIE Foods</div>
         <div style="font-size:13px;opacity:0.95;margin-top:6px;">New Contact Form Enquiry</div>
       </td>
     </tr>
@@ -219,7 +213,7 @@ function getBrevoConfig() {
   const fromEmail = String(
     process.env.BREVO_FROM_EMAIL || process.env.SMTP_USER || ""
   ).trim();
-  const fromName = String(process.env.BREVO_FROM_NAME || "Life Ionizers").trim();
+  const fromName = String(process.env.BREVO_FROM_NAME || "PIE Foods").trim();
 
   return {
     apiKey,
@@ -289,7 +283,7 @@ async function sendWithSmtp(
   const content = buildContactEmailContent(payload);
 
   const mailOptions = {
-    from: `"Website Contact" <${smtpUser}>`,
+    from: `"PIE Foods Website" <${smtpUser}>`,
     to: toAddress,
     replyTo: payload.email,
     subject: content.subject,
@@ -348,7 +342,7 @@ async function sendWithSmtp(
   throw lastError || { code: "UNKNOWN_SMTP_ERROR" };
 }
 
-function isValidPayload(body: any): body is ContactPayload {
+function isValidPayload(body: any): boolean {
   return (
     body &&
     REQUIRED_FIELDS.every(
@@ -359,14 +353,23 @@ function isValidPayload(body: any): body is ContactPayload {
   );
 }
 
+function normalizeContactPayload(body: any): ContactPayload {
+  return {
+    name: String(body.name).trim(),
+    email: String(body.email).trim(),
+    phone: String(body.phone || "").trim() || "Not provided",
+    subject: String(body.subject || "").trim() || "New website enquiry",
+    message: String(body.message).trim(),
+  };
+}
+
 export const submitContact = async (req: Request, res: Response) => {
   if (!isValidPayload(req.body)) {
-    return res.status(400).json({ message: "Invalid contact payload" });
+    return res.status(400).json({ message: "Name, email and message are required" });
   }
 
-  const toAddress =
-    process.env.CONTACT_TO_EMAIL || "shurya.kumar478@gmail.com";
-  const payload = req.body as ContactPayload;
+  const toAddress = process.env.CONTACT_TO_EMAIL || "piefoodsonline@gmail.com";
+  const payload = normalizeContactPayload(req.body);
   const hasBrevo = Boolean(String(process.env.BREVO_API_KEY || "").trim());
 
   if (hasBrevo) {
