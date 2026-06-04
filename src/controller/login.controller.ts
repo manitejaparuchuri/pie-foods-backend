@@ -2,10 +2,13 @@ import { Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { OAuth2Client } from "google-auth-library";
 import {
+  getUserProfile,
   isAuthFlowError,
   loginWithFirebaseAuth,
+  updateUserProfile,
   upsertFirestoreUserFromGoogleLogin,
 } from "../services/firebase-auth.service";
+import { AuthRequest } from "../middlewares/auth";
 
 const googleClient = new OAuth2Client();
 
@@ -45,6 +48,50 @@ export const login = async (req: Request, res: Response) => {
 
     console.error("LOGIN ERROR:", error?.message || error);
     return res.status(500).json({ message: "Server Error" });
+  }
+};
+
+export const getMe = async (req: AuthRequest, res: Response) => {
+  const uid = req.user?.uid;
+  if (!uid) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  try {
+    const user = await getUserProfile(uid);
+    if (!user) {
+      return res.status(404).json({ message: "Profile not found" });
+    }
+    return res.json({ user });
+  } catch (error: any) {
+    console.error("GET ME ERROR:", error?.message || error);
+    return res.status(500).json({ message: "Unable to load profile" });
+  }
+};
+
+export const updateMe = async (req: AuthRequest, res: Response) => {
+  const uid = req.user?.uid;
+  if (!uid) {
+    return res.status(401).json({ message: "Unauthorized" });
+  }
+
+  const body = req.body || {};
+  // Only accept the three fields a customer can change themselves.
+  const patch = {
+    name: typeof body.name === "string" ? body.name : undefined,
+    phone: typeof body.phone === "string" ? body.phone : undefined,
+    address: typeof body.address === "string" ? body.address : undefined,
+  };
+
+  try {
+    const user = await updateUserProfile(uid, patch);
+    return res.json({ message: "Profile updated", user });
+  } catch (error: any) {
+    if (isAuthFlowError(error)) {
+      return res.status(error.statusCode).json({ message: error.message });
+    }
+    console.error("UPDATE ME ERROR:", error?.message || error);
+    return res.status(500).json({ message: "Unable to update profile" });
   }
 };
 

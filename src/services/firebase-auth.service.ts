@@ -397,3 +397,56 @@ export async function getUserProfile(uid: string): Promise<SafeUser | null> {
   if (!profile?.email && !profile?.uid) return null;
   return buildSafeUser(uid, profile, String(profile.email || ""));
 }
+
+/**
+ * Update the parts of the profile a customer is allowed to change themselves:
+ * display name, phone, and (postal) address. Email and role stay server-managed.
+ * Also pushes the new display name to Firebase Auth so admin/login flows stay in sync.
+ */
+export async function updateUserProfile(
+  uid: string,
+  patch: { name?: string | null; phone?: string | null; address?: string | null }
+): Promise<SafeUser> {
+  if (!uid) {
+    throw new AuthFlowError("Missing user id", 400, "MISSING_UID");
+  }
+
+  const existing = await readUserProfile(uid);
+  if (!existing?.email && !existing?.uid) {
+    throw new AuthFlowError("User profile not found", 404, "PROFILE_NOT_FOUND");
+  }
+
+  const nextName = patch.name !== undefined
+    ? String(patch.name || "").trim()
+    : String(existing.name || "").trim();
+
+  if (!nextName) {
+    throw new AuthFlowError("Name cannot be empty", 400, "NAME_REQUIRED");
+  }
+
+  const nextPhone = patch.phone !== undefined ? normalizeNullableString(patch.phone) : normalizeNullableString(existing.phone);
+  const nextAddress = patch.address !== undefined ? normalizeNullableString(patch.address) : normalizeNullableString(existing.address);
+  const email = String(existing.email || "").trim().toLowerCase();
+
+  await usersCollection.doc(uid).set(
+    {
+      name: nextName,
+      phone: nextPhone,
+      address: nextAddress,
+      updated_at: Timestamp.now(),
+    },
+    { merge: true }
+  );
+
+  // Keep Firebase Auth displayName in sync so emails/admin tooling show the
+  // current name. Failure here is non-fatal — the Firestore profile is the
+  // source of truth for the storefront.
+  try {
+    await auth.updateUser(uid, { displayName: nextName });
+  } catch (error) {
+    console.warn("Failed to sync displayName to Firebase Auth:", error);
+  }
+
+  const profile = await readUserProfile(uid);
+  return buildSafeUser(uid, profile, email);
+}
