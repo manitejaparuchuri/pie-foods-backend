@@ -1,4 +1,5 @@
-import { Router } from "express";
+import { NextFunction, Request, Response, Router } from "express";
+import multer from "multer";
 import {
   adminLogin,
   changeAdminPassword,
@@ -43,7 +44,26 @@ router.get("/bootstrap", getAdminBootstrap);
 router.get("/db/tables", getDbTables);
 router.get("/db/tables/:tableName", getDbTableRows);
 router.get("/apis", getApiCatalog);
-router.post("/upload/image", upload.single("image"), uploadAdminImage);
+// Wrap multer.single so its errors (oversize file, wrong mimetype, missing
+// part) come back as a clean 400 JSON instead of a stack-trace 500.
+const acceptImage = upload.single("image");
+router.post(
+  "/upload/image",
+  (req: Request, res: Response, next: NextFunction) => {
+    acceptImage(req, res, (err: unknown) => {
+      if (!err) return next();
+      const message =
+        err instanceof multer.MulterError
+          ? err.code === "LIMIT_FILE_SIZE"
+            ? "Image is too large (max 5 MB)."
+            : `Upload failed (${err.code}).`
+          : (err as Error)?.message || "Invalid upload";
+      console.error("UPLOAD MIDDLEWARE ERROR:", err);
+      return res.status(400).json({ message });
+    });
+  },
+  uploadAdminImage
+);
 
 router.post("/categories", createCategory);
 router.put("/categories/:id", updateCategory);

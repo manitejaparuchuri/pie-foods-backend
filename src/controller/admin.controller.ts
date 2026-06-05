@@ -1,11 +1,15 @@
 import { Request, Response } from "express";
-import { unlink } from "fs/promises";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
+import { extname } from "path";
 import { Timestamp } from "firebase-admin/firestore";
 
 import { firestore } from "../config/firebase";
-import { isR2Configured, uploadFileToR2 } from "../config/r2";
+import {
+  getMissingR2EnvVars,
+  isR2Configured,
+  uploadBufferToR2,
+} from "../config/r2";
 import { useFirebaseAuth } from "../config/auth-provider";
 import { AuthRequest } from "../middlewares/auth";
 import firestoreCatalogService from "../services/catalog-firestore.service";
@@ -1420,32 +1424,59 @@ export const uploadAdminImage = async (req: Request, res: Response) => {
       return res.status(400).json({ message: "Image file is required" });
     }
 
-    const filename = String(file.filename || "").trim();
-    if (!filename) {
-      return res.status(500).json({ message: "Uploaded file name is invalid" });
+    // With memoryStorage, multer puts the bytes on `buffer` and leaves
+    // `filename`/`path` undefined. Sanity-check we actually have bytes before
+    // calling out to R2.
+    const buffer = file.buffer;
+    if (!buffer || !buffer.length) {
+      return res.status(400).json({ message: "Uploaded image was empty" });
     }
 
-    const localPath = String((file as Express.Multer.File & { path?: string }).path || "").trim();
+    // R2 is the only target — fail loudly if it isn't configured rather than
+    // silently writing into a phantom /assets/images path that nothing serves.
+    if (!isR2Configured()) {
+      const missing = getMissingR2EnvVars();
+      console.error("R2 NOT CONFIGURED — missing env vars:", missing);
+      return res.status(503).json({
+        message: `Image storage is not configured (missing: ${missing.join(", ")}). Set the R2_* env vars on the server.`,
+      });
+    }
 
-    if (isR2Configured() && localPath) {
-      const objectKey = `products/admin/${filename}`;
-      const url = await uploadFileToR2(localPath, objectKey);
-      await unlink(localPath).catch(() => undefined);
+    // Build a stable, safe object key. Original names can contain spaces,
+    // unicode, or upper-case characters that confuse CDNs and public URLs.
+    const originalExt = extname(String(file.originalname || "")).toLowerCase();
+    const safeExt = /^\.(png|jpe?g|webp|gif|avif|svg)$/.test(originalExt) ? originalExt : ".png";
+    const filename = `${Date.now()}-${crypto.randomBytes(6).toString("hex")}${safeExt}`;
+    const objectKey = `products/admin/${filename}`;
+
+    try {
+      const url = await uploadBufferToR2({
+        objectKey,
+        body: buffer,
+        contentType: file.mimetype || undefined,
+      });
+
       return res.status(201).json({
         message: "Image uploaded",
         filename,
         path: url,
         url,
       });
+    } catch (uploadError: any) {
+      // Surface the underlying SDK error to the server log so we can see
+      // 403/AccessDenied/NoSuchBucket vs network failures vs signature issues.
+      const code = uploadError?.Code || uploadError?.name || "";
+      const detail = uploadError?.message || String(uploadError);
+      console.error("R2 UPLOAD FAILED:", {
+        objectKey,
+        code,
+        detail,
+        bucket: String(process.env.R2_BUCKET_NAME || "").trim(),
+      });
+      return res.status(502).json({
+        message: `Image storage rejected the upload${code ? ` (${code})` : ""}.`,
+      });
     }
-
-    const path = `/assets/images/${filename}`;
-    return res.status(201).json({
-      message: "Image uploaded",
-      filename,
-      path,
-      url: path,
-    });
   } catch (error) {
     console.error("UPLOAD IMAGE ERROR:", error);
     return res.status(500).json({ message: "Unable to upload image" });
