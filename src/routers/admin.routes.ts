@@ -90,6 +90,8 @@ import {
   shipOrder,
   updateOrderStatus,
   getOrderLabel,
+  testDelhiveryConnection,
+  resetOrderShipping,
 } from "../controller/delhivery.controller";
 
 router.get("/coupons", getCoupons);
@@ -103,5 +105,7 @@ router.get("/orders", getAdminOrders);
 router.post("/orders/:id/ship", shipOrder);
 router.put("/orders/:id/status", updateOrderStatus);
 router.get("/orders/:id/label", getOrderLabel);
+router.post("/orders/:id/reset-shipping", resetOrderShipping);
+router.get("/delhivery/test", testDelhiveryConnection);
 
 export default router;
