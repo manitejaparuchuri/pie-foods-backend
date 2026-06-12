@@ -42,6 +42,10 @@ interface OrderHistory {
   finalAmount: number;
   couponCode: string | null;
   shippingId: string;
+  trackingWaybill: string | null;
+  trackingStatus: string | null;
+  shippedAt: string | null;
+  deliveredAt: string | null;
   items: OrderHistoryItem[];
 }
 
@@ -194,6 +198,8 @@ class OrderService {
     const orders: OrderHistory[] = snap.docs.map((doc) => {
       const data = doc.data() as Record<string, unknown>;
       const orderDate = data.order_date as Timestamp | undefined;
+      const shippedAt = data.shipped_at as Timestamp | undefined;
+      const deliveredAt = data.delivered_at as Timestamp | undefined;
       const itemsRaw = Array.isArray(data.items)
         ? (data.items as Array<Record<string, unknown>>)
         : [];
@@ -207,6 +213,10 @@ class OrderService {
         finalAmount: Number(data.final_amount) || 0,
         couponCode: (data.coupon_code as string) || null,
         shippingId: String(data.shipping_id || ""),
+        trackingWaybill: data.tracking_waybill ? String(data.tracking_waybill) : null,
+        trackingStatus: data.tracking_status ? String(data.tracking_status) : null,
+        shippedAt: shippedAt ? shippedAt.toDate().toISOString() : null,
+        deliveredAt: deliveredAt ? deliveredAt.toDate().toISOString() : null,
         items: itemsRaw.map((item) => ({
           productId: Number(item.product_id) || 0,
           name: String(item.name || "Product"),

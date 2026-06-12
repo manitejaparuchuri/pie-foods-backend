@@ -1409,6 +1409,12 @@ const API_CATALOG: ApiCatalogItem[] = [
   { method: "POST", path: "/api/admin/coupons", access: "admin" },
   { method: "PUT", path: "/api/admin/coupons/:id", access: "admin" },
   { method: "DELETE", path: "/api/admin/coupons/:id", access: "admin" },
+
+  { method: "GET", path: "/api/admin/orders", access: "admin" },
+  { method: "POST", path: "/api/admin/orders/:id/ship", access: "admin" },
+  { method: "PUT", path: "/api/admin/orders/:id/status", access: "admin" },
+
+  { method: "GET", path: "/api/orders/:id/track", access: "auth" },
 ];
 
 export const getApiCatalog = async (_req: Request, res: Response) => {

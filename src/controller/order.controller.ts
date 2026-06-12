@@ -89,6 +89,9 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
       ? (data.items as Array<Record<string, unknown>>)
       : [];
 
+    const shippedAt = data.shipped_at as Timestamp | undefined;
+    const deliveredAt = data.delivered_at as Timestamp | undefined;
+
     return res.status(200).json({
       orderId: snap.id,
       status: String(data.status || ""),
@@ -101,6 +104,10 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
       finalAmount: Number(data.final_amount) || 0,
       shippingId: String(data.shipping_id || ""),
       orderDate: orderDate ? orderDate.toDate().toISOString() : null,
+      trackingWaybill: data.tracking_waybill ? String(data.tracking_waybill) : null,
+      trackingStatus: data.tracking_status ? String(data.tracking_status) : null,
+      shippedAt: shippedAt ? shippedAt.toDate().toISOString() : null,
+      deliveredAt: deliveredAt ? deliveredAt.toDate().toISOString() : null,
       items: itemsRaw.map((item) => ({
         productId: Number(item.product_id) || 0,
         name: String(item.name || "Product"),

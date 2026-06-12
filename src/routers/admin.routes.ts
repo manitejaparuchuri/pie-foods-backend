@@ -85,10 +85,21 @@ router.put("/popular-products", updatePopularProductsShowcase);
 
 router.put("/trial-pack", updateTrialPack);
 
+import {
+  getAdminOrders,
+  shipOrder,
+  updateOrderStatus,
+} from "../controller/delhivery.controller";
+
 router.get("/coupons", getCoupons);
 router.get("/coupons/:id", getCouponById);
 router.post("/coupons", createCoupon);
 router.put("/coupons/:id", updateCoupon);
 router.delete("/coupons/:id", deleteCoupon);
+
+/* ─── Order management + Delhivery shipping ─── */
+router.get("/orders", getAdminOrders);
+router.post("/orders/:id/ship", shipOrder);
+router.put("/orders/:id/status", updateOrderStatus);
 
 export default router;
