@@ -89,6 +89,7 @@ import {
   getAdminOrders,
   shipOrder,
   updateOrderStatus,
+  getOrderLabel,
 } from "../controller/delhivery.controller";
 
 router.get("/coupons", getCoupons);
@@ -101,5 +102,6 @@ router.delete("/coupons/:id", deleteCoupon);
 router.get("/orders", getAdminOrders);
 router.post("/orders/:id/ship", shipOrder);
 router.put("/orders/:id/status", updateOrderStatus);
+router.get("/orders/:id/label", getOrderLabel);
 
 export default router;

@@ -279,6 +279,41 @@ export async function trackShipment(
 }
 
 /* ------------------------------------------------------------------ */
+/*  Shipping Label PDF                                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * Fetch the shipping-label PDF URL for a given waybill from Delhivery.
+ * Delhivery returns a JSON payload that contains a download URL (`pdf_link`)
+ * pointing to the actual PDF, which the admin prints + sticks on the box.
+ */
+export async function fetchShippingLabelUrl(waybill: string): Promise<string> {
+  try {
+    const client = delhiveryClient();
+    const res = await client.get("/api/p/packing_slip", {
+      params: { wbns: waybill, pdf: true },
+    });
+    const data = res.data;
+
+    // Delhivery responses vary; try the common shapes.
+    const url =
+      data?.pdf_link ||
+      data?.packages?.[0]?.pdf_link ||
+      data?.url ||
+      null;
+
+    if (typeof url === "string" && url.startsWith("http")) {
+      return url;
+    }
+    throw new Error("Label URL not present in Delhivery response");
+  } catch (error) {
+    const msg = extractErrorMessage(error);
+    console.error("DELHIVERY LABEL ERROR:", msg);
+    throw new Error(`Failed to fetch shipping label: ${msg}`);
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Helpers                                                            */
 /* ------------------------------------------------------------------ */
 

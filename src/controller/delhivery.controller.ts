@@ -6,9 +6,11 @@ import {
   generateWaybill,
   createShipment,
   trackShipment,
+  fetchShippingLabelUrl,
   isDelhiveryConfigured,
   ShipmentPayload,
 } from "../services/delhivery.service";
+import { notifyCustomerOrderShipped } from "../services/order-notifications.service";
 
 const ordersCollection = firestore.collection("orders");
 const usersCollection = firestore.collection("users");
@@ -22,6 +24,53 @@ export const getAdminOrders = async (_req: Request, res: Response) => {
       .limit(200)
       .get();
 
+    // Collect unique (uid, shippingId) and uid sets so we can batch-load
+    // addresses and user records in parallel rather than per order.
+    const userIds = new Set<string>();
+    const addressKeys = new Set<string>(); // "uid::addrId"
+    snap.docs.forEach((doc) => {
+      const d = doc.data() as Record<string, unknown>;
+      const uid = String(d.user_id || "");
+      const sid = String(d.shipping_id || "");
+      if (uid) userIds.add(uid);
+      if (uid && sid) addressKeys.add(`${uid}::${sid}`);
+    });
+
+    const userMap = new Map<string, { email: string; name: string }>();
+    const addressMap = new Map<string, Record<string, unknown>>();
+
+    await Promise.all([
+      ...Array.from(userIds).map(async (uid) => {
+        try {
+          const u = await usersCollection.doc(uid).get();
+          if (u.exists) {
+            const ud = u.data() as Record<string, unknown>;
+            userMap.set(uid, {
+              email: String(ud.email || ud.user_email || ""),
+              name: String(ud.name || ud.display_name || ud.full_name || ""),
+            });
+          }
+        } catch {
+          /* ignore */
+        }
+      }),
+      ...Array.from(addressKeys).map(async (key) => {
+        const [uid, addrId] = key.split("::");
+        try {
+          const a = await usersCollection
+            .doc(uid)
+            .collection("addresses")
+            .doc(addrId)
+            .get();
+          if (a.exists) {
+            addressMap.set(key, a.data() as Record<string, unknown>);
+          }
+        } catch {
+          /* ignore */
+        }
+      }),
+    ]);
+
     const orders = snap.docs.map((doc) => {
       const data = doc.data() as Record<string, unknown>;
       const orderDate = data.order_date as Timestamp | undefined;
@@ -29,6 +78,10 @@ export const getAdminOrders = async (_req: Request, res: Response) => {
       const itemsRaw = Array.isArray(data.items)
         ? (data.items as Array<Record<string, unknown>>)
         : [];
+      const uid = String(data.user_id || "");
+      const sid = String(data.shipping_id || "");
+      const user = userMap.get(uid);
+      const addr = addressMap.get(`${uid}::${sid}`);
 
       return {
         orderId: doc.id,
@@ -38,8 +91,21 @@ export const getAdminOrders = async (_req: Request, res: Response) => {
         subtotalAmount: Number(data.subtotal_amount) || 0,
         couponCode: data.coupon_code ? String(data.coupon_code) : null,
         couponDiscountAmount: Number(data.coupon_discount_amount) || 0,
-        userId: String(data.user_id || ""),
-        shippingId: String(data.shipping_id || ""),
+        userId: uid,
+        customerEmail: user?.email || null,
+        customerName: user?.name || (addr?.name ? String(addr.name) : null),
+        shippingId: sid,
+        shippingAddress: addr
+          ? {
+              name: String(addr.name || user?.name || ""),
+              phone: String(addr.phone || ""),
+              address: String(addr.address || ""),
+              city: String(addr.city || ""),
+              state: String(addr.state || ""),
+              postalCode: String(addr.postal_code || ""),
+              country: String(addr.country || "India"),
+            }
+          : null,
         trackingWaybill: data.tracking_waybill
           ? String(data.tracking_waybill)
           : null,
@@ -194,6 +260,11 @@ export const shipOrder = async (req: Request, res: Response) => {
       updated_at: Timestamp.now(),
     });
 
+    // Fire-and-forget shipment email to customer
+    notifyCustomerOrderShipped(orderId, waybill).catch((err) =>
+      console.error("customer shipped notify failed:", err)
+    );
+
     return res.json({
       message: "Order shipped successfully",
       orderId,
@@ -204,6 +275,42 @@ export const shipOrder = async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error("SHIP ORDER ERROR:", error);
     return res.status(500).json({ message: "Failed to ship order" });
+  }
+};
+
+/* ============================ ADMIN: GET SHIPPING LABEL ============================ */
+
+export const getOrderLabel = async (req: Request, res: Response) => {
+  const orderId = String(req.params.id || "").trim();
+  if (!orderId) {
+    return res.status(400).json({ message: "Invalid order id" });
+  }
+
+  if (!isDelhiveryConfigured()) {
+    return res.status(503).json({ message: "Delhivery is not configured" });
+  }
+
+  try {
+    const snap = await ordersCollection.doc(orderId).get();
+    if (!snap.exists) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+
+    const order = snap.data() as Record<string, unknown>;
+    const waybill = order.tracking_waybill ? String(order.tracking_waybill) : "";
+    if (!waybill) {
+      return res
+        .status(400)
+        .json({ message: "Order has not been shipped yet (no waybill)" });
+    }
+
+    const url = await fetchShippingLabelUrl(waybill);
+    return res.json({ orderId, waybill, labelUrl: url });
+  } catch (error: any) {
+    console.error("GET LABEL ERROR:", error);
+    return res
+      .status(500)
+      .json({ message: error?.message || "Failed to fetch shipping label" });
   }
 };
 

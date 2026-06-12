@@ -9,6 +9,7 @@ import {
   createRazorpayOrderService,
   verifyPaymentService,
 } from "../services/payment.service";
+import { notifyAdminOrderReceived } from "../services/order-notifications.service";
 
 const ordersCollection = firestore.collection("orders");
 const paymentsCollection = firestore.collection("payments");
@@ -372,6 +373,14 @@ export const razorpayWebhook = async (req: Request, res: Response) => {
 
     if (resolvedUserId && !stockShortfall) {
       await clearUserCart(resolvedUserId);
+    }
+
+    // Fire-and-forget admin notification (idempotent — won't re-send if verify
+    // already notified). Never blocks the webhook response.
+    if (!stockShortfall) {
+      notifyAdminOrderReceived(resolvedOrderId).catch((err) =>
+        console.error("admin notify (webhook) failed:", err)
+      );
     }
 
     console.log("Payment saved via webhook:", paymentId);

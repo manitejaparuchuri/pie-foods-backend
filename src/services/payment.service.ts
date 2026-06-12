@@ -3,6 +3,7 @@ import crypto from "crypto";
 import getRazorpayClient from "../config/razorpay";
 import { firestore } from "../config/firebase";
 import { getFirestoreProductsCollectionName } from "../config/catalog";
+import { notifyAdminOrderReceived } from "./order-notifications.service";
 
 const ordersCollection = firestore.collection("orders");
 const paymentsCollection = firestore.collection("payments");
@@ -286,5 +287,11 @@ export const verifyPaymentService = async (
   // logged but doesn't roll back the payment — better a stale cart than
   // a paid order that lost its payment record.
   await clearUserCart(uid);
+
+  // Fire-and-forget admin notification. Never blocks or fails the verify path.
+  notifyAdminOrderReceived(orderId).catch((err) =>
+    console.error("admin notify (verify) failed:", err)
+  );
+
   return true;
 };
