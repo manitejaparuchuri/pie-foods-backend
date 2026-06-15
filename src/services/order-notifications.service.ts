@@ -96,10 +96,27 @@ export async function notifyAdminOrderReceived(orderId: string): Promise<void> {
     // Don't re-send if already notified
     if (order.admin_notified_at) return;
 
-    const [addressRaw, user] = await Promise.all([
-      loadAddress(uid, shippingId),
-      loadUserEmail(uid),
-    ]);
+    // Guest orders carry customer email + inline shipping address on the doc.
+    // Logged-in orders look up the user record + address subcollection.
+    const isGuest = Boolean(order.is_guest) || !uid;
+
+    let customerEmail = "";
+    let customerName = "";
+    let address: Record<string, unknown> | null = null;
+
+    if (isGuest) {
+      customerEmail = String(order.customer_email || "");
+      customerName = String(order.customer_name || "");
+      address = (order.shipping_address as Record<string, unknown>) || null;
+    } else {
+      const [addressRaw, user] = await Promise.all([
+        loadAddress(uid, shippingId),
+        loadUserEmail(uid),
+      ]);
+      customerEmail = user.email || "";
+      customerName = user.name || "";
+      address = addressRaw;
+    }
 
     const orderDateTs = order.order_date as Timestamp | undefined;
 
@@ -110,16 +127,16 @@ export async function notifyAdminOrderReceived(orderId: string): Promise<void> {
       couponDiscountAmount: Number(order.coupon_discount_amount) || 0,
       paymentMethod: String(order.payment_method || "RAZORPAY"),
       items: toEmailItems(order.items),
-      customerEmail: user.email || undefined,
+      customerEmail: customerEmail || undefined,
       orderDate: orderDateTs ? orderDateTs.toDate() : new Date(),
-      address: addressRaw
+      address: address
         ? {
-            name: String(addressRaw.name || user.name || ""),
-            phone: String(addressRaw.phone || ""),
-            address: String(addressRaw.address || ""),
-            city: String(addressRaw.city || ""),
-            state: String(addressRaw.state || ""),
-            postal_code: String(addressRaw.postal_code || ""),
+            name: String(address.name || customerName || ""),
+            phone: String(address.phone || order.customer_phone || ""),
+            address: String(address.address || ""),
+            city: String(address.city || ""),
+            state: String(address.state || ""),
+            postal_code: String(address.postal_code || ""),
           }
         : undefined,
     });
@@ -147,18 +164,39 @@ export async function notifyCustomerOrderShipped(
 
     const order = snap.data() as Record<string, unknown>;
     const uid = String(order.user_id || "");
-    const user = await loadUserEmail(uid);
+    const isGuest = Boolean(order.is_guest) || !uid;
 
-    if (!user.email) {
+    let customerEmail = "";
+    let customerName = "";
+    if (isGuest) {
+      customerEmail = String(order.customer_email || "");
+      customerName = String(order.customer_name || "");
+    } else {
+      const user = await loadUserEmail(uid);
+      customerEmail = user.email;
+      customerName = user.name;
+    }
+
+    if (!customerEmail) {
       console.warn("notifyCustomerOrderShipped: no customer email", orderId);
       return;
     }
 
+    // Build a "view your order" URL. Guests need the access token to load it.
+    const siteUrl = String(
+      process.env.SITE_BASE_URL || "https://www.piefoods.com"
+    ).replace(/\/+$/, "");
+    const guestToken = isGuest ? String(order.guest_access_token || "") : "";
+    const trackingUrl = isGuest && guestToken
+      ? `${siteUrl}/order-confirmation/${encodeURIComponent(orderId)}?token=${encodeURIComponent(guestToken)}`
+      : undefined;
+
     await sendOrderShippedEmailToCustomer({
       orderId,
-      customerEmail: user.email,
-      customerName: user.name || undefined,
+      customerEmail,
+      customerName: customerName || undefined,
       waybill,
+      trackingUrl,
       items: toEmailItems(order.items),
       totalAmount: Number(order.total_amount) || 0,
     });

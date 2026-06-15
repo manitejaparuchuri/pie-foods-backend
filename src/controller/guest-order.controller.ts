@@ -1,0 +1,177 @@
+import { Request, Response } from "express";
+import { Timestamp } from "firebase-admin/firestore";
+import { firestore } from "../config/firebase";
+import {
+  createGuestOrder,
+  GuestOrderInput,
+  loadGuestOrderForAccess,
+  validateGuestOrderInput,
+} from "../services/guest-order.service";
+
+const ordersCollection = firestore.collection("orders");
+
+const GUEST_MAX_ORDERS_PER_EMAIL_PER_DAY = 20;
+
+/**
+ * Per-email rate limit. Legitimate customers almost never place more than a
+ * handful of orders per day; the cap is generous to avoid friction but still
+ * stops the same email being used as a spam funnel.
+ */
+async function isGuestEmailRateLimited(
+  email: string
+): Promise<{ limited: true; count: number } | { limited: false; count: number }> {
+  const normalized = email.trim().toLowerCase();
+  const since = Timestamp.fromMillis(Date.now() - 24 * 60 * 60 * 1000);
+  const snap = await ordersCollection
+    .where("customer_email", "==", normalized)
+    .where("order_date", ">=", since)
+    .limit(GUEST_MAX_ORDERS_PER_EMAIL_PER_DAY + 1)
+    .get();
+  if (snap.size >= GUEST_MAX_ORDERS_PER_EMAIL_PER_DAY) {
+    return { limited: true, count: snap.size };
+  }
+  return { limited: false, count: snap.size };
+}
+
+/* ============================ POST /api/orders/guest ============================ */
+
+export const createGuestOrderController = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    const validation = validateGuestOrderInput(req.body);
+    if (!validation.ok) {
+      return res.status(400).json({ message: validation.error });
+    }
+
+    // Per-email rate limit — circuit breaker against abuse
+    const limit = await isGuestEmailRateLimited(String(req.body.email).trim().toLowerCase());
+    if (limit.limited) {
+      return res.status(429).json({
+        message:
+          "Too many recent orders for this email. Please try again tomorrow, or sign in to continue.",
+      });
+    }
+
+    const result = await createGuestOrder(req.body as GuestOrderInput);
+
+    return res.status(201).json({
+      message: "Guest order created",
+      orderId: result.orderId,
+      guestAccessToken: result.guestAccessToken,
+      totalAmount: result.totalAmount,
+      subtotalAmount: result.subtotalAmount,
+      paymentMethod: result.paymentMethod,
+      status: result.status,
+    });
+  } catch (error: any) {
+    console.error("CREATE GUEST ORDER ERROR:", error?.message || error);
+    const safe = new Set([
+      "Cart is empty",
+      "None of the items in the cart are available",
+      "Order amount must be greater than zero",
+    ]);
+    const message = String(error?.message || "");
+    if (safe.has(message)) {
+      return res.status(400).json({ message });
+    }
+    return res.status(500).json({ message: "Failed to create guest order" });
+  }
+};
+
+/* ============================ GET /api/orders/guest/:id?token=... ============================ */
+
+export const getGuestOrderController = async (req: Request, res: Response) => {
+  try {
+    const orderId = String(req.params.id || "").trim();
+    const token = String(req.query.token || req.headers["x-guest-token"] || "").trim();
+
+    const { data } = await loadGuestOrderForAccess(orderId, token);
+
+    const orderDate = data.order_date as Timestamp | undefined;
+    const shippedAt = data.shipped_at as Timestamp | undefined;
+    const deliveredAt = data.delivered_at as Timestamp | undefined;
+    const itemsRaw = Array.isArray(data.items)
+      ? (data.items as Array<Record<string, unknown>>)
+      : [];
+
+    const shipping = (data.shipping_address as Record<string, unknown>) || null;
+
+    return res.json({
+      orderId,
+      status: String(data.status || ""),
+      paymentMethod: String(data.payment_method || "RAZORPAY"),
+      providerOrderId: data.provider_order_id ? String(data.provider_order_id) : null,
+      totalAmount: Number(data.total_amount) || 0,
+      subtotalAmount: Number(data.subtotal_amount) || 0,
+      couponCode: data.coupon_code ? String(data.coupon_code) : null,
+      couponDiscountAmount: Number(data.coupon_discount_amount) || 0,
+      customerName: data.customer_name ? String(data.customer_name) : null,
+      customerEmail: data.customer_email ? String(data.customer_email) : null,
+      customerPhone: data.customer_phone ? String(data.customer_phone) : null,
+      shippingAddress: shipping
+        ? {
+            name: String(shipping.name || ""),
+            phone: String(shipping.phone || ""),
+            address: String(shipping.address || ""),
+            city: String(shipping.city || ""),
+            state: String(shipping.state || ""),
+            postalCode: String(shipping.postal_code || ""),
+            country: String(shipping.country || "India"),
+          }
+        : null,
+      trackingWaybill: data.tracking_waybill ? String(data.tracking_waybill) : null,
+      trackingStatus: data.tracking_status ? String(data.tracking_status) : null,
+      orderDate: orderDate ? orderDate.toDate().toISOString() : null,
+      shippedAt: shippedAt ? shippedAt.toDate().toISOString() : null,
+      deliveredAt: deliveredAt ? deliveredAt.toDate().toISOString() : null,
+      items: itemsRaw.map((item) => ({
+        productId: Number(item.product_id) || 0,
+        name: String(item.name || "Product"),
+        imageUrl: (item.image_url as string) || null,
+        quantity: Number(item.quantity) || 0,
+        price: Number(item.price) || 0,
+        lineTotal: Number(item.line_total) || 0,
+      })),
+    });
+  } catch (error: any) {
+    const message = String(error?.message || "");
+    if (
+      message === "Order id and access token are required" ||
+      message === "Order not found"
+    ) {
+      return res.status(404).json({ message: "Order not found" });
+    }
+    console.error("GET GUEST ORDER ERROR:", error);
+    return res.status(500).json({ message: "Failed to load order" });
+  }
+};
+
+/** Auto-mark guest order's user_id when an OTP-verified user matches email. */
+export async function linkGuestOrdersToUser(
+  email: string,
+  uid: string
+): Promise<number> {
+  if (!email || !uid) return 0;
+  const normalizedEmail = email.trim().toLowerCase();
+
+  const snap = await ordersCollection
+    .where("customer_email", "==", normalizedEmail)
+    .where("user_id", "==", null)
+    .limit(200)
+    .get();
+
+  if (snap.empty) return 0;
+
+  const batch = firestore.batch();
+  snap.docs.forEach((doc) => {
+    batch.update(doc.ref, {
+      user_id: uid,
+      linked_via_otp_at: Timestamp.now(),
+      updated_at: Timestamp.now(),
+    });
+  });
+  await batch.commit();
+  return snap.size;
+}

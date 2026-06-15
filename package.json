@@ -16,7 +16,8 @@
     "firestore:migrate": "ts-node src/scripts/migrate-firestore.ts",
     "firestore:verify": "ts-node src/scripts/verify-firestore-migration.ts",
     "firestore:cleanup-fields": "ts-node src/scripts/cleanup-removed-fields.ts",
-    "firestore:delete-orders": "ts-node src/scripts/delete-test-orders.ts"
+    "firestore:delete-orders": "ts-node src/scripts/delete-test-orders.ts",
+    "firestore:cleanup-stale": "ts-node src/scripts/cleanup-stale-pending-orders.ts"
   },
   "keywords": [],
   "author": "",
