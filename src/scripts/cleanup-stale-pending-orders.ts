@@ -31,32 +31,38 @@ const ordersCollection = firestore.collection("orders");
 const otpCollection = firestore.collection("otp_codes");
 
 async function cleanupStaleOrders(): Promise<number> {
-  const cutoff = Timestamp.fromMillis(Date.now() - STALE_HOURS * 60 * 60 * 1000);
+  const cutoffMillis = Date.now() - STALE_HOURS * 60 * 60 * 1000;
+
+  // Single-field equality on status (no composite index needed); filter date in memory.
   const snap = await ordersCollection
     .where("status", "==", "PENDING_PAYMENT")
-    .where("order_date", "<", cutoff)
     .limit(1000)
     .get();
 
-  if (snap.empty) {
+  const staleDocs = snap.docs.filter((doc) => {
+    const ts = doc.data().order_date as Timestamp | undefined;
+    return ts && ts.toMillis() < cutoffMillis;
+  });
+
+  if (staleDocs.length === 0) {
     console.log(`  [orders] no stale PENDING_PAYMENT orders older than ${STALE_HOURS}h`);
     return 0;
   }
 
   if (!APPLY) {
-    console.log(`  [orders] would delete ${snap.size} stale PENDING_PAYMENT order(s)`);
-    snap.docs.slice(0, 5).forEach((doc) => {
+    console.log(`  [orders] would delete ${staleDocs.length} stale PENDING_PAYMENT order(s)`);
+    staleDocs.slice(0, 5).forEach((doc) => {
       const data = doc.data();
       console.log(`    • ${doc.id} (email: ${data.customer_email || data.user_id || "?"})`);
     });
-    if (snap.size > 5) console.log(`    … and ${snap.size - 5} more`);
-    return snap.size;
+    if (staleDocs.length > 5) console.log(`    … and ${staleDocs.length - 5} more`);
+    return staleDocs.length;
   }
 
   let deleted = 0;
   let batch = firestore.batch();
   let pending = 0;
-  for (const doc of snap.docs) {
+  for (const doc of staleDocs) {
     batch.delete(doc.ref);
     pending++;
     if (pending >= BATCH_SIZE) {

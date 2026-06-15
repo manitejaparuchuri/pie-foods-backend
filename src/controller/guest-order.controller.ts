@@ -16,21 +16,33 @@ const GUEST_MAX_ORDERS_PER_EMAIL_PER_DAY = 20;
  * Per-email rate limit. Legitimate customers almost never place more than a
  * handful of orders per day; the cap is generous to avoid friction but still
  * stops the same email being used as a spam funnel.
+ *
+ * Implementation note: We use a single-field equality on customer_email to
+ * avoid requiring a composite Firestore index. The 24-hour window filter is
+ * applied in memory. For real customers (lifetime orders < 200) this is
+ * cheap and self-contained — no Firestore index setup needed.
  */
 async function isGuestEmailRateLimited(
   email: string
 ): Promise<{ limited: true; count: number } | { limited: false; count: number }> {
   const normalized = email.trim().toLowerCase();
-  const since = Timestamp.fromMillis(Date.now() - 24 * 60 * 60 * 1000);
   const snap = await ordersCollection
     .where("customer_email", "==", normalized)
-    .where("order_date", ">=", since)
-    .limit(GUEST_MAX_ORDERS_PER_EMAIL_PER_DAY + 1)
+    .limit(200)
     .get();
-  if (snap.size >= GUEST_MAX_ORDERS_PER_EMAIL_PER_DAY) {
-    return { limited: true, count: snap.size };
+
+  const sinceMillis = Date.now() - 24 * 60 * 60 * 1000;
+  let recentCount = 0;
+  for (const doc of snap.docs) {
+    const ts = doc.data().order_date as Timestamp | undefined;
+    if (ts && ts.toMillis() >= sinceMillis) {
+      recentCount++;
+      if (recentCount >= GUEST_MAX_ORDERS_PER_EMAIL_PER_DAY) {
+        return { limited: true, count: recentCount };
+      }
+    }
   }
-  return { limited: false, count: snap.size };
+  return { limited: false, count: recentCount };
 }
 
 /* ============================ POST /api/orders/guest ============================ */
@@ -148,7 +160,11 @@ export const getGuestOrderController = async (req: Request, res: Response) => {
   }
 };
 
-/** Auto-mark guest order's user_id when an OTP-verified user matches email. */
+/**
+ * Auto-mark guest order's user_id when an OTP-verified user matches email.
+ * Uses a single-field equality (no composite index needed) and filters
+ * unlinked orders in memory.
+ */
 export async function linkGuestOrdersToUser(
   email: string,
   uid: string
@@ -158,14 +174,20 @@ export async function linkGuestOrdersToUser(
 
   const snap = await ordersCollection
     .where("customer_email", "==", normalizedEmail)
-    .where("user_id", "==", null)
-    .limit(200)
+    .limit(500)
     .get();
 
   if (snap.empty) return 0;
 
+  // Only update orders that aren't already linked to a user
+  const unlinked = snap.docs.filter((doc) => {
+    const userId = doc.data().user_id;
+    return userId === null || userId === undefined || userId === "";
+  });
+  if (unlinked.length === 0) return 0;
+
   const batch = firestore.batch();
-  snap.docs.forEach((doc) => {
+  unlinked.forEach((doc) => {
     batch.update(doc.ref, {
       user_id: uid,
       linked_via_otp_at: Timestamp.now(),
@@ -173,5 +195,5 @@ export async function linkGuestOrdersToUser(
     });
   });
   await batch.commit();
-  return snap.size;
+  return unlinked.length;
 }
