@@ -1,0 +1,33 @@
+# Reduce build context — Cloud Build uploads everything in this folder
+# except the patterns below. Keeps deploys fast and avoids leaking secrets.
+
+# Build output (re-built inside the image)
+dist
+node_modules
+
+# Dev tooling
+.git
+.gitignore
+.editorconfig
+.eslintrc*
+.prettierrc*
+*.log
+
+# Local env / secrets — Cloud Run env vars replace these
+.env
+.env.*
+*.pem
+firebase-service-account*.json
+service-account*.json
+
+# IDE
+.vscode
+.idea
+*.swp
+
+# Misc
+README.md
+*.md
+test
+tests
+coverage
