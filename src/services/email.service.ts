@@ -142,6 +142,8 @@ interface OrderEmailAddress {
 
 interface OrderEmailData {
   orderId: string;
+  /** Friendly order number shown to the customer/admin (e.g. PF2606120001). */
+  displayOrderId?: string;
   totalAmount: number;
   subtotalAmount?: number;
   couponDiscountAmount?: number;
@@ -204,9 +206,9 @@ export async function sendOrderReceivedEmailToAdmin(
   const submittedAt = formatIndiaTimestamp(order.orderDate || new Date());
   const itemsHtml = buildItemsTable(order.items);
   const addressHtml = buildAddressBlock(order.address);
-  const shortId = order.orderId.slice(0, 12);
+  const displayId = (order.displayOrderId || "").trim() || order.orderId.slice(0, 12);
 
-  const subject = `New Order Received — ${shortId} (${inr(order.totalAmount)})`;
+  const subject = `New Order Received — ${displayId} (${inr(order.totalAmount)})`;
 
   const html = `
 <div style="margin:0;padding:24px;background:#f3f7fa;font-family:Arial,Helvetica,sans-serif;color:#1f2937;">
@@ -219,9 +221,9 @@ export async function sendOrderReceivedEmailToAdmin(
     </tr>
     <tr>
       <td style="padding:22px 24px 6px;">
-        <div style="font-size:14px;color:#6b7280;">Order ID</div>
-        <div style="font-size:16px;font-weight:700;color:#111827;margin-bottom:14px;">${escapeHtml(
-          order.orderId
+        <div style="font-size:14px;color:#6b7280;">Order Number</div>
+        <div style="font-size:18px;font-weight:700;color:#111827;margin-bottom:14px;letter-spacing:0.04em;">${escapeHtml(
+          displayId
         )}</div>
 
         <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse;margin-bottom:18px;">
@@ -290,7 +292,7 @@ export async function sendOrderReceivedEmailToAdmin(
   const text = `
 New Order Received
 
-Order ID: ${order.orderId}
+Order Number: ${displayId}
 Payment: ${order.paymentMethod}
 Received At: ${submittedAt}
 Total: ${inr(order.totalAmount)}
@@ -322,6 +324,8 @@ Login to admin panel: https://www.piefoods.com/admin/login
 
 interface ShippedEmailData {
   orderId: string;
+  /** Friendly order number shown to the customer (e.g. PF2606120001). */
+  displayOrderId?: string;
   customerEmail: string;
   customerName?: string;
   waybill: string;
@@ -339,8 +343,8 @@ export async function sendOrderShippedEmailToCustomer(
 ): Promise<boolean> {
   if (!data.customerEmail) return false;
 
-  const shortId = data.orderId.slice(0, 12);
-  const subject = `Your PIE Foods order has been shipped — ${shortId}`;
+  const displayId = (data.displayOrderId || "").trim() || data.orderId.slice(0, 12);
+  const subject = `Your PIE Foods order has been shipped — ${displayId}`;
 
   const itemsHtml = buildItemsTable(data.items);
   const trackingUrl =
@@ -413,7 +417,7 @@ Hi${data.customerName ? " " + data.customerName : ""},
 
 Great news — your PIE Foods order has been shipped via Delhivery!
 
-Order ID: ${data.orderId}
+Order Number: ${displayId}
 Tracking Number (AWB): ${data.waybill}
 
 Track your order: ${trackingUrl}

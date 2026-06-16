@@ -85,6 +85,7 @@ export const getAdminOrders = async (_req: Request, res: Response) => {
 
       return {
         orderId: doc.id,
+        orderNumber: data.order_number ? String(data.order_number) : null,
         status: String(data.status || ""),
         paymentMethod: String(data.payment_method || "RAZORPAY"),
         totalAmount: Number(data.total_amount) || 0,

@@ -40,6 +40,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
           ? "COD order placed successfully"
           : "Order created successfully",
       orderId: result.orderId,
+      orderNumber: result.orderNumber,
       totalAmount: result.totalAmount,
       paymentMethod: result.paymentMethod,
       status: result.status,
@@ -94,6 +95,7 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
 
     return res.status(200).json({
       orderId: snap.id,
+      orderNumber: data.order_number ? String(data.order_number) : null,
       status: String(data.status || ""),
       paymentMethod: String(data.payment_method || "RAZORPAY"),
       providerOrderId: data.provider_order_id ? String(data.provider_order_id) : null,

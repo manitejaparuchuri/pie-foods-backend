@@ -122,6 +122,7 @@ export async function notifyAdminOrderReceived(orderId: string): Promise<void> {
 
     await sendOrderReceivedEmailToAdmin({
       orderId,
+      displayOrderId: order.order_number ? String(order.order_number) : undefined,
       totalAmount: Number(order.total_amount) || 0,
       subtotalAmount: Number(order.subtotal_amount) || 0,
       couponDiscountAmount: Number(order.coupon_discount_amount) || 0,
@@ -193,6 +194,7 @@ export async function notifyCustomerOrderShipped(
 
     await sendOrderShippedEmailToCustomer({
       orderId,
+      displayOrderId: order.order_number ? String(order.order_number) : undefined,
       customerEmail,
       customerName: customerName || undefined,
       waybill,

@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import { Timestamp } from "firebase-admin/firestore";
 import { firestore } from "../config/firebase";
+import { generateOrderNumber } from "./order-number.service";
 import {
   buildPricedItemsAndSubtotal,
   calculateTotalsFromSubtotal,
@@ -50,6 +51,7 @@ export interface GuestOrderInput {
 
 export interface GuestOrderResult {
   orderId: string;
+  orderNumber: string;
   guestAccessToken: string;
   totalAmount: number;
   subtotalAmount: number;
@@ -181,9 +183,11 @@ export async function createGuestOrder(
 
   const guestAccessToken = generateAccessToken();
   const orderRef = ordersCollection.doc();
+  const orderNumber = await generateOrderNumber();
 
   await orderRef.set({
     order_id: orderRef.id,
+    order_number: orderNumber,
     user_id: null,
     is_guest: true,
     guest_access_token: guestAccessToken,
@@ -216,6 +220,7 @@ export async function createGuestOrder(
 
   return {
     orderId: orderRef.id,
+    orderNumber,
     guestAccessToken,
     totalAmount: totals.totalAmount,
     subtotalAmount: totals.subtotalAmount,

@@ -71,6 +71,7 @@ export const createGuestOrderController = async (
     return res.status(201).json({
       message: "Guest order created",
       orderId: result.orderId,
+      orderNumber: result.orderNumber,
       guestAccessToken: result.guestAccessToken,
       totalAmount: result.totalAmount,
       subtotalAmount: result.subtotalAmount,
@@ -112,6 +113,7 @@ export const getGuestOrderController = async (req: Request, res: Response) => {
 
     return res.json({
       orderId,
+      orderNumber: data.order_number ? String(data.order_number) : null,
       status: String(data.status || ""),
       paymentMethod: String(data.payment_method || "RAZORPAY"),
       providerOrderId: data.provider_order_id ? String(data.provider_order_id) : null,

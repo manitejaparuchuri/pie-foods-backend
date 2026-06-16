@@ -5,6 +5,7 @@ import {
   consumeCoupon,
   validateCouponForAmount,
 } from "./coupon.service";
+import { generateOrderNumber } from "./order-number.service";
 import {
   buildPricedItemsAndSubtotal,
   calculateTotalsFromSubtotal,
@@ -16,6 +17,7 @@ const usersCollection = firestore.collection("users");
 
 interface CreateOrderResult {
   orderId: string;
+  orderNumber: string;
   totalAmount: number;
   paymentMethod: PaymentMethod;
   status: string;
@@ -34,6 +36,7 @@ interface OrderHistoryItem {
 
 interface OrderHistory {
   orderId: string;
+  orderNumber: string | null;
   orderDate: string | null;
   status: string;
   totalAmount: number;
@@ -123,6 +126,11 @@ class OrderService {
       }))
     );
 
+    // Pre-generate the friendly order number (its own atomic txn).
+    // If the order-create txn fails, the counter still ticks forward — a
+    // small gap in the sequence is harmless.
+    const orderNumber = await generateOrderNumber();
+
     const result = await firestore.runTransaction(async (tx) => {
       const preCouponTotals = calculateTotalsFromSubtotal(subtotalPaise, 0);
       const appliedCoupon: AppliedCoupon | null = await validateCouponForAmount(
@@ -151,6 +159,7 @@ class OrderService {
 
       tx.set(orderRef, {
         order_id: orderRef.id,
+        order_number: orderNumber,
         user_id: uid,
         status: orderStatus,
         shipping_id: shippingId,
@@ -173,6 +182,7 @@ class OrderService {
 
       return {
         orderId: orderRef.id,
+        orderNumber,
         totalAmount: totals.totalAmount,
         coupon: appliedCoupon
           ? { code: appliedCoupon.code, discountAmount: totals.couponDiscountAmount }
@@ -186,6 +196,7 @@ class OrderService {
 
     return {
       orderId: result.orderId,
+      orderNumber: result.orderNumber,
       totalAmount: result.totalAmount,
       paymentMethod: normalizedPaymentMethod,
       status: orderStatus,
@@ -205,6 +216,7 @@ class OrderService {
         : [];
       return {
         orderId: doc.id,
+        orderNumber: data.order_number ? String(data.order_number) : null,
         orderDate: orderDate ? orderDate.toDate().toISOString() : null,
         status: String(data.status || ""),
         totalAmount: Number(data.total_amount) || 0,
