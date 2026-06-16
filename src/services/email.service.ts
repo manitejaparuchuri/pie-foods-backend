@@ -440,3 +440,172 @@ Total: ${inr(data.totalAmount)}
     text,
   });
 }
+
+/* ===================================================================
+   Status-change emails (out-for-delivery + delivered)
+   =================================================================== */
+
+interface StatusChangeEmailData {
+  orderId: string;
+  displayOrderId?: string;
+  customerEmail: string;
+  customerName?: string;
+  waybill?: string;
+  trackingUrl?: string;
+}
+
+/**
+ * "Your order is out for delivery!" — fired the first time tracking flips
+ * to OUT_FOR_DELIVERY. Customer typically receives this in the morning.
+ */
+export async function sendOrderOutForDeliveryEmail(
+  data: StatusChangeEmailData
+): Promise<boolean> {
+  if (!data.customerEmail) return false;
+  const displayId = (data.displayOrderId || "").trim() || data.orderId.slice(0, 12);
+  const subject = `Out for delivery — your PIE Foods order ${displayId}`;
+  const trackingUrl =
+    data.trackingUrl ||
+    (data.waybill
+      ? `https://www.delhivery.com/track/package/${encodeURIComponent(data.waybill)}`
+      : "");
+
+  const html = `
+<div style="margin:0;padding:24px;background:#f3f7fa;font-family:Arial,Helvetica,sans-serif;color:#1f2937;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
+    <tr>
+      <td style="background:#2f3b2d;padding:20px 24px;color:#fff;">
+        <div style="font-size:22px;font-weight:700;">PIE Foods</div>
+        <div style="font-size:13px;opacity:0.95;margin-top:6px;">Out for delivery today!</div>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:22px 24px;">
+        <p style="font-size:15px;color:#111827;margin:0 0 14px;">
+          Hi${data.customerName ? " " + escapeHtml(data.customerName) : ""},
+        </p>
+        <p style="font-size:14px;color:#374151;line-height:1.6;margin:0 0 18px;">
+          Great news — your PIE Foods order <strong>${escapeHtml(displayId)}</strong>
+          is <strong>out for delivery</strong> and should reach you today.
+          Please keep your phone handy so our courier partner can reach you.
+        </p>
+        ${
+          data.waybill
+            ? `<div style="background:#fef3c7;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;margin-bottom:18px;">
+                <div style="font-size:13px;color:#92400e;margin-bottom:6px;">Tracking Number (AWB)</div>
+                <div style="font-size:18px;font-weight:700;color:#78350f;letter-spacing:0.04em;">${escapeHtml(
+                  data.waybill
+                )}</div>
+              </div>`
+            : ""
+        }
+        ${
+          trackingUrl
+            ? `<div style="text-align:center;margin-bottom:22px;">
+                <a href="${trackingUrl}" style="display:inline-block;background:#2f3b2d;color:#fff;text-decoration:none;padding:12px 26px;border-radius:10px;font-weight:600;font-size:14px;">Track your delivery</a>
+              </div>`
+            : ""
+        }
+        <p style="margin:0;font-size:13px;color:#6b7280;line-height:1.6;">
+          Need to reschedule or have a question? Reply to this email or write to us at info&#64;piefoods.com.
+        </p>
+        <p style="margin:18px 0 0;font-size:13px;color:#111827;font-weight:600;">— Team PIE Foods</p>
+      </td>
+    </tr>
+  </table>
+</div>
+  `.trim();
+
+  const text = `
+Hi${data.customerName ? " " + data.customerName : ""},
+
+Your PIE Foods order ${displayId} is OUT FOR DELIVERY today.
+${data.waybill ? `Tracking (AWB): ${data.waybill}` : ""}
+${trackingUrl ? `Track: ${trackingUrl}` : ""}
+
+Please keep your phone handy.
+
+— Team PIE Foods
+  `.trim();
+
+  return sendEmail({
+    to: data.customerEmail,
+    toName: data.customerName,
+    subject,
+    html,
+    text,
+  });
+}
+
+/**
+ * "Your order has been delivered!" — fired the first time tracking flips
+ * to DELIVERED. Customer gets a friendly thank-you + soft ask for review.
+ */
+export async function sendOrderDeliveredEmail(
+  data: StatusChangeEmailData
+): Promise<boolean> {
+  if (!data.customerEmail) return false;
+  const displayId = (data.displayOrderId || "").trim() || data.orderId.slice(0, 12);
+  const subject = `Delivered! Enjoy your PIE Foods order ${displayId}`;
+
+  const html = `
+<div style="margin:0;padding:24px;background:#f3f7fa;font-family:Arial,Helvetica,sans-serif;color:#1f2937;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
+    <tr>
+      <td style="background:#2f3b2d;padding:20px 24px;color:#fff;">
+        <div style="font-size:22px;font-weight:700;">PIE Foods</div>
+        <div style="font-size:13px;opacity:0.95;margin-top:6px;">Delivered — thank you!</div>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:22px 24px;">
+        <p style="font-size:15px;color:#111827;margin:0 0 14px;">
+          Hi${data.customerName ? " " + escapeHtml(data.customerName) : ""},
+        </p>
+        <p style="font-size:14px;color:#374151;line-height:1.6;margin:0 0 18px;">
+          Your PIE Foods order <strong>${escapeHtml(displayId)}</strong> has been
+          <strong>delivered</strong>. We hope you love what's inside.
+        </p>
+
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px 18px;margin-bottom:18px;text-align:center;">
+          <div style="font-size:14px;color:#166534;line-height:1.5;">
+            Loved your goodies? It would mean the world if you left a quick review on the product page.
+          </div>
+        </div>
+
+        <div style="text-align:center;margin-bottom:22px;">
+          <a href="https://www.piefoods.com/products" style="display:inline-block;background:#2f3b2d;color:#fff;text-decoration:none;padding:12px 26px;border-radius:10px;font-weight:600;font-size:14px;">Shop again</a>
+        </div>
+
+        <p style="margin:0;font-size:13px;color:#6b7280;line-height:1.6;">
+          Issue with the order? Reply within 7 days and we'll make it right. Reach us at info&#64;piefoods.com.
+        </p>
+        <p style="margin:18px 0 0;font-size:13px;color:#111827;font-weight:600;">— Team PIE Foods</p>
+      </td>
+    </tr>
+  </table>
+</div>
+  `.trim();
+
+  const text = `
+Hi${data.customerName ? " " + data.customerName : ""},
+
+Your PIE Foods order ${displayId} has been DELIVERED.
+
+We hope you love what's inside! If you have a moment, please leave a quick review.
+
+Shop again: https://www.piefoods.com/products
+
+Issue with the order? Reply within 7 days and we'll make it right.
+
+— Team PIE Foods
+  `.trim();
+
+  return sendEmail({
+    to: data.customerEmail,
+    toName: data.customerName,
+    subject,
+    html,
+    text,
+  });
+}

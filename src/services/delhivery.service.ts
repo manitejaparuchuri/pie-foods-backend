@@ -200,6 +200,122 @@ export async function createShipment(
 }
 
 /* ------------------------------------------------------------------ */
+/*  Pickup Request                                                     */
+/* ------------------------------------------------------------------ */
+
+export interface PickupRequestResult {
+  success: boolean;
+  pickupId: string | null;
+  scheduledFor: string | null;
+  remark: string | null;
+}
+
+/**
+ * Schedule a pickup with Delhivery so a courier driver actually comes to
+ * collect the package. WITHOUT this call, manifestation alone just
+ * registers the shipment — no courier gets dispatched, and packages sit
+ * in the warehouse forever waiting for a pickup that never happens.
+ *
+ * Delhivery API: POST /fm/request/new/
+ *   Body: {
+ *     pickup_location: <warehouse_name>,
+ *     pickup_date:     <YYYY-MM-DD, IST>,
+ *     pickup_time:     <HH:MM:SS, IST>,
+ *     expected_package_count: <int>
+ *   }
+ *   Response (typical): {
+ *     pr_brn: "...", pickup_id: "...", request_no: "...", success: true
+ *   }
+ *
+ * We schedule for "today after 4pm IST" if the call lands before 4pm,
+ * otherwise "tomorrow at 11am IST" — matches typical D2C SOPs.
+ */
+export async function schedulePickupRequest(
+  expectedPackageCount = 1
+): Promise<PickupRequestResult> {
+  const warehouseName = getEnv(
+    "DELHIVERY_WAREHOUSE_NAME",
+    "PIE Foods Warehouse"
+  );
+  if (!warehouseName) {
+    throw new Error("DELHIVERY_WAREHOUSE_NAME is not configured");
+  }
+
+  // IST current time (UTC+5:30)
+  const nowMillis = Date.now();
+  const istNow = new Date(nowMillis + 330 * 60 * 1000);
+
+  const istHour = istNow.getUTCHours();
+  let pickupDate: Date;
+  let pickupHourIst: number;
+  if (istHour < 16) {
+    // Before 4pm IST → same-day pickup at 4pm IST
+    pickupDate = istNow;
+    pickupHourIst = 16;
+  } else {
+    // After 4pm IST → next-day pickup at 11am IST
+    pickupDate = new Date(istNow.getTime() + 24 * 60 * 60 * 1000);
+    pickupHourIst = 11;
+  }
+  const yyyy = pickupDate.getUTCFullYear();
+  const mm = String(pickupDate.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(pickupDate.getUTCDate()).padStart(2, "0");
+  const dateStr = `${yyyy}-${mm}-${dd}`;
+  const timeStr = `${String(pickupHourIst).padStart(2, "0")}:00:00`;
+
+  try {
+    const client = delhiveryClient();
+    const res = await client.post(
+      "/fm/request/new/",
+      {
+        pickup_location: warehouseName,
+        pickup_date: dateStr,
+        pickup_time: timeStr,
+        expected_package_count: Math.max(1, Math.min(expectedPackageCount, 99)),
+      },
+      { headers: { "Content-Type": "application/json" } }
+    );
+    const data = res.data || {};
+    const success =
+      data.success === true ||
+      !!data.pr_brn ||
+      !!data.pickup_id ||
+      !!data.request_no;
+
+    if (!success) {
+      return {
+        success: false,
+        pickupId: null,
+        scheduledFor: null,
+        remark:
+          String(data.remark || data.message || "Pickup request not confirmed"),
+      };
+    }
+
+    return {
+      success: true,
+      pickupId: String(
+        data.pickup_id || data.pr_brn || data.request_no || ""
+      ),
+      scheduledFor: `${dateStr} ${timeStr} IST`,
+      remark: String(data.remark || data.message || "Pickup scheduled"),
+    };
+  } catch (error) {
+    const msg = extractErrorMessage(error);
+    console.error("DELHIVERY PICKUP REQUEST ERROR:", msg);
+    // Don't throw — the shipment is already manifested. Pickup failure is
+    // recoverable by re-trying or by admin scheduling pickup manually from
+    // Delhivery's dashboard.
+    return {
+      success: false,
+      pickupId: null,
+      scheduledFor: `${dateStr} ${timeStr} IST`,
+      remark: msg,
+    };
+  }
+}
+
+/* ------------------------------------------------------------------ */
 /*  Tracking                                                           */
 /* ------------------------------------------------------------------ */
 

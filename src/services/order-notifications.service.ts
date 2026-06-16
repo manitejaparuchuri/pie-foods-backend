@@ -1,6 +1,8 @@
 import { Timestamp } from "firebase-admin/firestore";
 import { firestore } from "../config/firebase";
 import {
+  sendOrderDeliveredEmail,
+  sendOrderOutForDeliveryEmail,
   sendOrderReceivedEmailToAdmin,
   sendOrderShippedEmailToCustomer,
 } from "./email.service";
@@ -204,5 +206,111 @@ export async function notifyCustomerOrderShipped(
     });
   } catch (err) {
     console.error("notifyCustomerOrderShipped error:", err);
+  }
+}
+
+/**
+ * Shared loader for "fire customer email about a status change" — looks up the
+ * order, resolves customer email + name (auth or guest), builds the tracking
+ * URL, and hands everything off to the caller. Returns null when there's no
+ * email to send (e.g. order missing customer info).
+ */
+async function loadStatusChangeContext(orderId: string): Promise<{
+  data: Record<string, unknown>;
+  customerEmail: string;
+  customerName: string;
+  waybill: string;
+  trackingUrl?: string;
+} | null> {
+  const snap = await ordersCollection.doc(orderId).get();
+  if (!snap.exists) return null;
+  const data = snap.data() as Record<string, unknown>;
+  const uid = String(data.user_id || "");
+  const isGuest = Boolean(data.is_guest) || !uid;
+
+  let customerEmail = "";
+  let customerName = "";
+  if (isGuest) {
+    customerEmail = String(data.customer_email || "");
+    customerName = String(data.customer_name || "");
+  } else {
+    const user = await loadUserEmail(uid);
+    customerEmail = user.email;
+    customerName = user.name;
+  }
+  if (!customerEmail) return null;
+
+  const waybill = String(data.tracking_waybill || "");
+  const siteUrl = String(
+    process.env.SITE_BASE_URL || "https://www.piefoods.com"
+  ).replace(/\/+$/, "");
+  const guestToken = isGuest ? String(data.guest_access_token || "") : "";
+  const trackingUrl =
+    isGuest && guestToken
+      ? `${siteUrl}/order-confirmation/${encodeURIComponent(orderId)}?token=${encodeURIComponent(guestToken)}`
+      : `${siteUrl}/orders`;
+
+  return { data, customerEmail, customerName, waybill, trackingUrl };
+}
+
+/**
+ * "Your order is out for delivery!" — best-effort, never throws.
+ * Marks `ofd_notified_at` after sending so the same status doesn't re-spam.
+ */
+export async function notifyCustomerOrderOutForDelivery(
+  orderId: string
+): Promise<void> {
+  try {
+    const ctx = await loadStatusChangeContext(orderId);
+    if (!ctx) return;
+    if (ctx.data.ofd_notified_at) return; // already sent
+
+    await sendOrderOutForDeliveryEmail({
+      orderId,
+      displayOrderId: ctx.data.order_number
+        ? String(ctx.data.order_number)
+        : undefined,
+      customerEmail: ctx.customerEmail,
+      customerName: ctx.customerName || undefined,
+      waybill: ctx.waybill || undefined,
+      trackingUrl: ctx.trackingUrl,
+    });
+
+    await ordersCollection.doc(orderId).update({
+      ofd_notified_at: Timestamp.now(),
+    });
+  } catch (err) {
+    console.error("notifyCustomerOrderOutForDelivery error:", err);
+  }
+}
+
+/**
+ * "Your order has been delivered!" — best-effort, never throws.
+ * Marks `delivered_notified_at` after sending so duplicate polls don't re-spam.
+ */
+export async function notifyCustomerOrderDelivered(
+  orderId: string
+): Promise<void> {
+  try {
+    const ctx = await loadStatusChangeContext(orderId);
+    if (!ctx) return;
+    if (ctx.data.delivered_notified_at) return; // already sent
+
+    await sendOrderDeliveredEmail({
+      orderId,
+      displayOrderId: ctx.data.order_number
+        ? String(ctx.data.order_number)
+        : undefined,
+      customerEmail: ctx.customerEmail,
+      customerName: ctx.customerName || undefined,
+      waybill: ctx.waybill || undefined,
+      trackingUrl: ctx.trackingUrl,
+    });
+
+    await ordersCollection.doc(orderId).update({
+      delivered_notified_at: Timestamp.now(),
+    });
+  } catch (err) {
+    console.error("notifyCustomerOrderDelivered error:", err);
   }
 }

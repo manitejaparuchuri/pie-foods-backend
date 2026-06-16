@@ -4,6 +4,7 @@ import { Timestamp } from "firebase-admin/firestore";
 import OrderService from "../services/order.service";
 import { AuthRequest } from "../middlewares/auth";
 import { COUPON_ERRORS } from "../services/coupon.service";
+import { isDelhiveryConfigured, trackShipment } from "../services/delhivery.service";
 
 type PaymentMethod = "RAZORPAY" | "COD";
 
@@ -91,7 +92,20 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
       : [];
 
     const shippedAt = data.shipped_at as Timestamp | undefined;
+    const outForDeliveryAt = data.out_for_delivery_at as Timestamp | undefined;
     const deliveredAt = data.delivered_at as Timestamp | undefined;
+
+    // Live tracking so the confirmation page has fresh scan history without
+    // waiting for the next cron poll.
+    const waybill = data.tracking_waybill ? String(data.tracking_waybill) : null;
+    let liveTracking: Awaited<ReturnType<typeof trackShipment>> | null = null;
+    if (waybill && isDelhiveryConfigured()) {
+      try {
+        liveTracking = await trackShipment(waybill);
+      } catch (trackErr) {
+        console.error("Logged-in live-tracking fetch failed:", trackErr);
+      }
+    }
 
     return res.status(200).json({
       orderId: snap.id,
@@ -106,9 +120,19 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
       finalAmount: Number(data.final_amount) || 0,
       shippingId: String(data.shipping_id || ""),
       orderDate: orderDate ? orderDate.toDate().toISOString() : null,
-      trackingWaybill: data.tracking_waybill ? String(data.tracking_waybill) : null,
+      trackingWaybill: waybill,
       trackingStatus: data.tracking_status ? String(data.tracking_status) : null,
+      trackingLastLocation: data.tracking_last_location
+        ? String(data.tracking_last_location)
+        : null,
+      trackingExpectedDelivery: data.tracking_expected_delivery
+        ? String(data.tracking_expected_delivery)
+        : null,
+      liveTracking,
       shippedAt: shippedAt ? shippedAt.toDate().toISOString() : null,
+      outForDeliveryAt: outForDeliveryAt
+        ? outForDeliveryAt.toDate().toISOString()
+        : null,
       deliveredAt: deliveredAt ? deliveredAt.toDate().toISOString() : null,
       items: itemsRaw.map((item) => ({
         productId: Number(item.product_id) || 0,

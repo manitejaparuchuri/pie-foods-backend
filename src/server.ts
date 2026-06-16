@@ -20,6 +20,7 @@ import comboRoutes from "./routers/combo.routes";
 import bannerRoutes from "./routers/banner.routes";
 import popularProductsRoutes from "./routers/popular-products.routes";
 import storefrontRoutes from "./routers/storefront.routes";
+import cronRoutes from "./routers/cron.routes";
 
 const app = express();
 app.disable("x-powered-by");
@@ -156,6 +157,7 @@ app.use("/api/banners", bannerRoutes);
 app.use("/api/popular-products", popularProductsRoutes);
 app.use("/api/storefront", storefrontRoutes);
 app.use("/api/admin", adminRoutes);
+app.use("/api/cron", cronRoutes);
 
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   if (err?.message === "Not allowed by CORS") {

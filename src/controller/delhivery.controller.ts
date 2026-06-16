@@ -5,6 +5,7 @@ import { AuthRequest } from "../middlewares/auth";
 import {
   generateWaybill,
   createShipment,
+  schedulePickupRequest,
   trackShipment,
   fetchShippingLabelUrl,
   isDelhiveryConfigured,
@@ -118,6 +119,15 @@ export const getAdminOrders = async (_req: Request, res: Response) => {
           : null,
         delhiveryResponse: data.delhivery_response
           ? String(data.delhivery_response)
+          : null,
+        pickupRequestStatus: data.pickup_request_status
+          ? String(data.pickup_request_status)
+          : null,
+        pickupRequestScheduledFor: data.pickup_request_scheduled_for
+          ? String(data.pickup_request_scheduled_for)
+          : null,
+        pickupRequestRemark: data.pickup_request_remark
+          ? String(data.pickup_request_remark)
           : null,
         shippedAt: data.shipped_at
           ? (data.shipped_at as Timestamp).toDate().toISOString()
@@ -329,6 +339,23 @@ export const shipOrder = async (req: Request, res: Response) => {
     const wasAlreadyShipped =
       delhiveryStatus === DELHIVERY_STATUS_MANIFESTED || status === "SHIPPED";
 
+    // Step 3: Schedule courier pickup. Without this, manifestation alone just
+    // registers the shipment — no driver is dispatched. Pickup failure does
+    // NOT roll back the shipment; admin can re-schedule from Delhivery's
+    // dashboard if needed.
+    let pickup: Awaited<ReturnType<typeof schedulePickupRequest>> | null = null;
+    try {
+      pickup = await schedulePickupRequest(totalQty);
+    } catch (pickupError: any) {
+      console.error("PICKUP REQUEST UNEXPECTED ERROR:", pickupError?.message);
+      pickup = {
+        success: false,
+        pickupId: null,
+        scheduledFor: null,
+        remark: String(pickupError?.message || pickupError),
+      };
+    }
+
     await ordersCollection.doc(orderId).update({
       status: "SHIPPED",
       tracking_waybill: waybill,
@@ -336,6 +363,10 @@ export const shipOrder = async (req: Request, res: Response) => {
       shipped_at: Timestamp.now(),
       delhivery_status: DELHIVERY_STATUS_MANIFESTED,
       delhivery_response: shipmentResult.remark || "Manifested",
+      pickup_request_status: pickup.success ? "SCHEDULED" : "FAILED",
+      pickup_request_id: pickup.pickupId,
+      pickup_request_scheduled_for: pickup.scheduledFor,
+      pickup_request_remark: pickup.remark,
       updated_at: Timestamp.now(),
     });
 
@@ -355,6 +386,7 @@ export const shipOrder = async (req: Request, res: Response) => {
       status: "SHIPPED",
       retried: isRetry,
       delhiveryResponse: shipmentResult,
+      pickupRequest: pickup,
     });
   } catch (error: any) {
     console.error("SHIP ORDER ERROR:", error);

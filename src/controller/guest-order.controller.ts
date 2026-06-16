@@ -7,6 +7,7 @@ import {
   loadGuestOrderForAccess,
   validateGuestOrderInput,
 } from "../services/guest-order.service";
+import { isDelhiveryConfigured, trackShipment } from "../services/delhivery.service";
 
 const ordersCollection = firestore.collection("orders");
 
@@ -105,11 +106,27 @@ export const getGuestOrderController = async (req: Request, res: Response) => {
     const orderDate = data.order_date as Timestamp | undefined;
     const shippedAt = data.shipped_at as Timestamp | undefined;
     const deliveredAt = data.delivered_at as Timestamp | undefined;
+    const outForDeliveryAt = data.out_for_delivery_at as Timestamp | undefined;
     const itemsRaw = Array.isArray(data.items)
       ? (data.items as Array<Record<string, unknown>>)
       : [];
 
     const shipping = (data.shipping_address as Record<string, unknown>) || null;
+
+    // Live tracking: when the order has a waybill and Delhivery is configured,
+    // fetch the latest scan history so the guest's confirmation page can
+    // render the same timeline a logged-in customer would see.
+    const waybill = data.tracking_waybill ? String(data.tracking_waybill) : null;
+    let liveTracking: Awaited<ReturnType<typeof trackShipment>> | null = null;
+    if (waybill && isDelhiveryConfigured()) {
+      try {
+        liveTracking = await trackShipment(waybill);
+      } catch (trackErr) {
+        // Tracking failures must not break the order page — fall back to
+        // the snapshot stored on the order doc.
+        console.error("Guest live-tracking fetch failed:", trackErr);
+      }
+    }
 
     return res.json({
       orderId,
@@ -137,8 +154,18 @@ export const getGuestOrderController = async (req: Request, res: Response) => {
         : null,
       trackingWaybill: data.tracking_waybill ? String(data.tracking_waybill) : null,
       trackingStatus: data.tracking_status ? String(data.tracking_status) : null,
+      trackingLastLocation: data.tracking_last_location
+        ? String(data.tracking_last_location)
+        : null,
+      trackingExpectedDelivery: data.tracking_expected_delivery
+        ? String(data.tracking_expected_delivery)
+        : null,
+      liveTracking,
       orderDate: orderDate ? orderDate.toDate().toISOString() : null,
       shippedAt: shippedAt ? shippedAt.toDate().toISOString() : null,
+      outForDeliveryAt: outForDeliveryAt
+        ? outForDeliveryAt.toDate().toISOString()
+        : null,
       deliveredAt: deliveredAt ? deliveredAt.toDate().toISOString() : null,
       items: itemsRaw.map((item) => ({
         productId: Number(item.product_id) || 0,
