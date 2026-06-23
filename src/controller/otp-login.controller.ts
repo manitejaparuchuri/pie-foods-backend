@@ -12,6 +12,7 @@ import {
   verifyOtp,
 } from "../services/otp.service";
 import { linkGuestOrdersToUser } from "./guest-order.controller";
+import { notifyCustomerWelcome } from "../services/order-notifications.service";
 
 const usersCollection = firestore.collection(getFirestoreUsersCollectionName());
 const fbAuth = getAuth();
@@ -54,6 +55,7 @@ export const verifyOtpController = async (req: Request, res: Response) => {
 
     // Find or create a Firebase user for this email
     let firebaseUser;
+    let isNewUser = false;
     try {
       firebaseUser = await fbAuth.getUserByEmail(email);
     } catch {
@@ -62,6 +64,7 @@ export const verifyOtpController = async (req: Request, res: Response) => {
         emailVerified: true, // OTP-verified
         displayName: email.split("@")[0],
       });
+      isNewUser = true;
     }
 
     const uid = firebaseUser.uid;
@@ -98,6 +101,14 @@ export const verifyOtpController = async (req: Request, res: Response) => {
       linkedCount = await linkGuestOrdersToUser(email, uid);
     } catch (err) {
       console.error("Auto-link guest orders failed:", err);
+    }
+
+    // Welcome email — only fired the FIRST time we mint a user record for
+    // this email. Returning customers signing in via OTP don't get spammed.
+    if (isNewUser) {
+      notifyCustomerWelcome(email, String(baseProfile.name)).catch((err) =>
+        console.error("welcome notify (otp) failed:", err)
+      );
     }
 
     // Mint the same JWT shape as the password login path

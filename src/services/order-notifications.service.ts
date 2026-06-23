@@ -1,11 +1,14 @@
 import { Timestamp } from "firebase-admin/firestore";
 import { firestore } from "../config/firebase";
 import {
+  sendOrderConfirmedEmailToCustomer,
   sendOrderDeliveredEmail,
   sendOrderOutForDeliveryEmail,
   sendOrderReceivedEmailToAdmin,
   sendOrderShippedEmailToCustomer,
+  sendWelcomeEmail,
 } from "./email.service";
+import { generateInvoicePdf, InvoiceData } from "./invoice-pdf.service";
 
 /* ===================================================================
    Order Notifications
@@ -312,5 +315,143 @@ export async function notifyCustomerOrderDelivered(
     });
   } catch (err) {
     console.error("notifyCustomerOrderDelivered error:", err);
+  }
+}
+
+/* ===================================================================
+   Welcome email — fired the first time an account is created
+   =================================================================== */
+
+/**
+ * Send the warm welcome email. Best-effort: logs but never throws so the
+ * register/OTP-verify endpoints aren't gated on email delivery.
+ */
+export async function notifyCustomerWelcome(
+  email: string,
+  name?: string | null
+): Promise<void> {
+  try {
+    const normalizedEmail = String(email || "").trim().toLowerCase();
+    if (!normalizedEmail) return;
+    await sendWelcomeEmail({
+      customerEmail: normalizedEmail,
+      customerName: name ? String(name).trim() : undefined,
+    });
+  } catch (err) {
+    console.error("notifyCustomerWelcome error:", err);
+  }
+}
+
+/* ===================================================================
+   Order confirmation email + PDF invoice (customer-facing)
+   =================================================================== */
+
+/**
+ * Fired when a customer's payment is verified successful. Loads the order,
+ * generates a PDF invoice, and emails the customer with the invoice
+ * attached. Best-effort; never throws (so a failed email cannot roll back
+ * a verified payment).
+ *
+ * Idempotent via `customer_confirmation_notified_at` — a repeat call after
+ * a successful send is a no-op.
+ */
+export async function notifyCustomerOrderConfirmed(orderId: string): Promise<void> {
+  try {
+    const snap = await ordersCollection.doc(orderId).get();
+    if (!snap.exists) return;
+    const order = snap.data() as Record<string, unknown>;
+
+    // Avoid double-send when both verify-path and webhook-path try to notify.
+    if (order.customer_confirmation_notified_at) return;
+
+    const uid = String(order.user_id || "");
+    const isGuest = Boolean(order.is_guest) || !uid;
+
+    let customerEmail = "";
+    let customerName = "";
+    let address: Record<string, unknown> | null = null;
+    let customerPhone = "";
+
+    if (isGuest) {
+      customerEmail = String(order.customer_email || "");
+      customerName = String(order.customer_name || "");
+      customerPhone = String(order.customer_phone || "");
+      address = (order.shipping_address as Record<string, unknown>) || null;
+    } else {
+      const [addressRaw, user] = await Promise.all([
+        loadAddress(uid, String(order.shipping_id || "")),
+        loadUserEmail(uid),
+      ]);
+      customerEmail = user.email || "";
+      customerName = user.name || "";
+      address = addressRaw;
+    }
+
+    if (!customerEmail) {
+      console.warn("notifyCustomerOrderConfirmed: no customer email", orderId);
+      return;
+    }
+
+    const displayOrderId = order.order_number
+      ? String(order.order_number)
+      : orderId.slice(0, 12);
+    const orderDateTs = order.order_date as Timestamp | undefined;
+    const orderDate = orderDateTs ? orderDateTs.toDate() : new Date();
+
+    const items = toEmailItems(order.items);
+    const invoiceData: InvoiceData = {
+      orderId,
+      displayOrderId,
+      orderDate,
+      customerName: customerName || undefined,
+      customerEmail,
+      customerPhone: customerPhone || undefined,
+      shippingAddress: address
+        ? {
+            name: String(address.name || customerName || ""),
+            phone: String(address.phone || customerPhone || ""),
+            address: String(address.address || ""),
+            city: String(address.city || ""),
+            state: String(address.state || ""),
+            postal_code: String(address.postal_code || ""),
+            country: String(address.country || "India"),
+          }
+        : undefined,
+      items,
+      subtotalAmount: Number(order.subtotal_amount) || 0,
+      couponDiscountAmount: Number(order.coupon_discount_amount) || 0,
+      shippingAmount: Number(order.shipping_amount) || 0,
+      codSurchargeAmount: Number(order.cod_surcharge_amount) || 0,
+      cgstAmount: Number(order.cgst_amount) || 0,
+      sgstAmount: Number(order.sgst_amount) || 0,
+      totalAmount: Number(order.total_amount) || 0,
+      paymentMethod: String(order.payment_method || "RAZORPAY"),
+    };
+
+    // Build the PDF in-process; if it fails, fall back to sending the email
+    // without the attachment rather than dropping the whole confirmation.
+    let invoicePdf: Buffer | undefined;
+    try {
+      invoicePdf = await generateInvoicePdf(invoiceData);
+    } catch (pdfErr) {
+      console.error("Invoice PDF generation failed:", pdfErr);
+    }
+
+    await sendOrderConfirmedEmailToCustomer({
+      orderId,
+      displayOrderId,
+      customerEmail,
+      customerName: customerName || undefined,
+      totalAmount: invoiceData.totalAmount,
+      paymentMethod: invoiceData.paymentMethod,
+      items,
+      invoicePdf,
+    });
+
+    await ordersCollection.doc(orderId).update({
+      customer_confirmation_notified_at: Timestamp.now(),
+    });
+  } catch (err) {
+    console.error("notifyCustomerOrderConfirmed error:", err);
   }
 }

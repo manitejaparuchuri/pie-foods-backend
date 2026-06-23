@@ -5,7 +5,10 @@ import { firestore } from "../config/firebase";
 import getRazorpayClient from "../config/razorpay";
 import { getFirestoreProductsCollectionName } from "../config/catalog";
 import { loadGuestOrderForAccess } from "../services/guest-order.service";
-import { notifyAdminOrderReceived } from "../services/order-notifications.service";
+import {
+  notifyAdminOrderReceived,
+  notifyCustomerOrderConfirmed,
+} from "../services/order-notifications.service";
 
 const ordersCollection = firestore.collection("orders");
 const paymentsCollection = firestore.collection("payments");
@@ -323,9 +326,12 @@ export const verifyGuestPayment = async (req: Request, res: Response) => {
       });
     });
 
-    // Fire-and-forget admin notification (never blocks the response)
+    // Fire-and-forget notifications (never block the response)
     notifyAdminOrderReceived(orderId).catch((err) =>
       console.error("admin notify (guest verify) failed:", err)
+    );
+    notifyCustomerOrderConfirmed(orderId).catch((err) =>
+      console.error("customer confirm notify (guest verify) failed:", err)
     );
 
     return res.json({

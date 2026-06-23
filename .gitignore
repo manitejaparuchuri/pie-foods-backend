@@ -3,3 +3,5 @@ dist/
 .env
 *firebase-adminsdk*.json
 *serviceAccount*.json
+.env.yaml
+railway-env.txt

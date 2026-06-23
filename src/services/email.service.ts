@@ -12,6 +12,12 @@ import nodemailer from "nodemailer";
 const getEnv = (key: string, fallback = ""): string =>
   String(process.env[key] || "").trim() || fallback;
 
+export interface EmailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
+}
+
 interface EmailMessage {
   to: string;
   toName?: string;
@@ -19,6 +25,7 @@ interface EmailMessage {
   html: string;
   text: string;
   replyTo?: string;
+  attachments?: EmailAttachment[];
 }
 
 function escapeHtml(input: string): string {
@@ -49,6 +56,12 @@ async function sendViaBrevo(message: EmailMessage): Promise<boolean> {
 
   if (!apiKey || !fromEmail) return false;
 
+  // Brevo expects attachments as { name, content } with content being base64.
+  const brevoAttachments = (message.attachments || []).map((a) => ({
+    name: a.filename,
+    content: a.content.toString("base64"),
+  }));
+
   await axios.post(
     "https://api.brevo.com/v3/smtp/email",
     {
@@ -58,10 +71,11 @@ async function sendViaBrevo(message: EmailMessage): Promise<boolean> {
       subject: message.subject,
       htmlContent: message.html,
       textContent: message.text,
+      attachment: brevoAttachments.length ? brevoAttachments : undefined,
     },
     {
       headers: { "api-key": apiKey, "Content-Type": "application/json" },
-      timeout: 10000,
+      timeout: 15000,
     }
   );
   return true;
@@ -91,6 +105,11 @@ async function sendViaSmtp(message: EmailMessage): Promise<boolean> {
     subject: message.subject,
     text: message.text,
     html: message.html,
+    attachments: (message.attachments || []).map((a) => ({
+      filename: a.filename,
+      content: a.content,
+      contentType: a.contentType,
+    })),
   });
   return true;
 }
@@ -607,5 +626,201 @@ Issue with the order? Reply within 7 days and we'll make it right.
     subject,
     html,
     text,
+  });
+}
+
+/* ===================================================================
+   New-customer welcome email
+   =================================================================== */
+
+interface WelcomeEmailData {
+  customerEmail: string;
+  customerName?: string;
+}
+
+/**
+ * Fired the first time a user account is created (password register or
+ * first-time OTP sign-in). Quick warm hello + brand intro + link to shop.
+ * Best-effort: never throws.
+ */
+export async function sendWelcomeEmail(
+  data: WelcomeEmailData
+): Promise<boolean> {
+  if (!data.customerEmail) return false;
+  const subject = "Welcome to PIE Foods — clean food, no compromise";
+  const firstName = (data.customerName || "").split(" ")[0].trim();
+  const greeting = firstName ? `Hi ${escapeHtml(firstName)},` : "Hi there,";
+
+  const html = `
+<div style="margin:0;padding:24px;background:#f3f7fa;font-family:Arial,Helvetica,sans-serif;color:#1f2937;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
+    <tr>
+      <td style="background:#2f3b2d;padding:22px 24px;color:#fff;">
+        <div style="font-size:24px;font-weight:700;">PIE Foods</div>
+        <div style="font-size:13px;opacity:0.92;margin-top:4px;">Welcome to the family.</div>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:24px;">
+        <p style="font-size:15px;color:#111827;margin:0 0 14px;">${greeting}</p>
+        <p style="font-size:14px;color:#374151;line-height:1.65;margin:0 0 18px;">
+          Glad to have you on board. PIE Foods makes India's first monk fruit
+          sweetener and clean freeze-dried fruit snacks — zero sugar, zero
+          calories, FSSAI-certified, made for real Indian kitchens.
+        </p>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px 18px;margin-bottom:18px;">
+          <div style="font-size:13px;color:#166534;font-weight:700;margin-bottom:6px;">What's next</div>
+          <ul style="margin:0;padding-left:18px;color:#15803d;font-size:13px;line-height:1.7;">
+            <li>Browse the shop and pick what fits your kitchen</li>
+            <li>Free delivery on every order above &#8377;599</li>
+            <li>5% GST already included in every price you see</li>
+          </ul>
+        </div>
+        <div style="text-align:center;margin-bottom:22px;">
+          <a href="https://www.piefoods.com/products" style="display:inline-block;background:#2f3b2d;color:#fff;text-decoration:none;padding:12px 26px;border-radius:10px;font-weight:600;font-size:14px;">Start Shopping</a>
+        </div>
+        <p style="margin:0;font-size:13px;color:#6b7280;line-height:1.6;">
+          Questions? Reply to this email or write to us at info&#64;piefoods.com.
+        </p>
+        <p style="margin:18px 0 0;font-size:13px;color:#111827;font-weight:600;">&mdash; Team PIE Foods</p>
+      </td>
+    </tr>
+  </table>
+</div>
+  `.trim();
+
+  const text = `
+${firstName ? "Hi " + firstName : "Hi there"},
+
+Welcome to PIE Foods! We make India's first monk fruit sweetener and clean freeze-dried fruit snacks.
+
+What's next:
+  - Browse the shop: https://www.piefoods.com/products
+  - Free delivery above Rs.599
+  - 5% GST already included in every price you see
+
+Questions? Just reply to this email.
+
+- Team PIE Foods
+  `.trim();
+
+  return sendEmail({
+    to: data.customerEmail,
+    toName: data.customerName,
+    subject,
+    html,
+    text,
+  });
+}
+
+/* ===================================================================
+   Order Confirmed email (customer-facing) - with PDF invoice attached
+   =================================================================== */
+
+interface OrderConfirmedEmailData {
+  orderId: string;
+  displayOrderId?: string;
+  customerEmail: string;
+  customerName?: string;
+  totalAmount: number;
+  paymentMethod: string;
+  items: OrderEmailItem[];
+  /** Optional PDF invoice buffer; attached as Invoice-<orderId>.pdf when present. */
+  invoicePdf?: Buffer;
+}
+
+/**
+ * Fired the moment a customer's payment is verified. Confirms the order,
+ * promises delivery + next-steps, attaches a PDF invoice. Best-effort.
+ */
+export async function sendOrderConfirmedEmailToCustomer(
+  data: OrderConfirmedEmailData
+): Promise<boolean> {
+  if (!data.customerEmail) return false;
+  const displayId =
+    (data.displayOrderId || "").trim() || data.orderId.slice(0, 12);
+  const subject = `Order confirmed - PIE Foods #${displayId}`;
+  const itemsHtml = buildItemsTable(data.items);
+
+  const html = `
+<div style="margin:0;padding:24px;background:#f3f7fa;font-family:Arial,Helvetica,sans-serif;color:#1f2937;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
+    <tr>
+      <td style="background:#2f3b2d;padding:22px 24px;color:#fff;">
+        <div style="font-size:22px;font-weight:700;">PIE Foods</div>
+        <div style="font-size:13px;opacity:0.95;margin-top:6px;">Payment received - your order is confirmed</div>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:22px 24px;">
+        <p style="font-size:15px;color:#111827;margin:0 0 14px;">
+          Hi${data.customerName ? " " + escapeHtml(data.customerName) : ""},
+        </p>
+        <p style="font-size:14px;color:#374151;line-height:1.65;margin:0 0 18px;">
+          Thanks for your order. We've received your payment and your goodies
+          are being packed. We'll email you the tracking link the moment our
+          courier picks up the parcel.
+        </p>
+
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:14px 16px;margin-bottom:18px;">
+          <div style="font-size:13px;color:#166534;margin-bottom:4px;">Order Number</div>
+          <div style="font-size:18px;font-weight:700;color:#14532d;letter-spacing:0.04em;">${escapeHtml(displayId)}</div>
+          <div style="font-size:13px;color:#15803d;margin-top:8px;">Total paid: <strong>${inr(data.totalAmount)}</strong> via ${escapeHtml(data.paymentMethod)}</div>
+        </div>
+
+        <div style="font-size:13px;color:#6b7280;margin-bottom:6px;">Items</div>
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border:1px solid #e5e7eb;border-radius:10px;border-collapse:separate;overflow:hidden;margin-bottom:18px;">
+          <tr style="background:#f3f4f6;">
+            <th align="left" style="padding:10px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;">Item</th>
+            <th align="center" style="padding:10px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;">Qty</th>
+            <th align="right" style="padding:10px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;">Price</th>
+            <th align="right" style="padding:10px;font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;">Total</th>
+          </tr>
+          ${itemsHtml}
+        </table>
+
+        <p style="margin:0 0 6px;font-size:13px;color:#6b7280;">
+          A printable invoice is attached to this email as a PDF.
+        </p>
+        <p style="margin:18px 0 0;font-size:13px;color:#111827;font-weight:600;">&mdash; Team PIE Foods</p>
+      </td>
+    </tr>
+  </table>
+</div>
+  `.trim();
+
+  const text = `
+Hi${data.customerName ? " " + data.customerName : ""},
+
+Thanks for your order. Your payment has been received and your order is confirmed.
+
+Order Number: ${displayId}
+Total paid: ${inr(data.totalAmount)} via ${data.paymentMethod}
+
+Items:
+${data.items
+  .map((i) => `  - ${i.name} x${i.quantity} = ${inr(i.lineTotal)}`)
+  .join("\n")}
+
+A PDF invoice is attached. We'll email you the tracking link when the courier picks up your parcel.
+
+- Team PIE Foods
+  `.trim();
+
+  return sendEmail({
+    to: data.customerEmail,
+    toName: data.customerName,
+    subject,
+    html,
+    text,
+    attachments: data.invoicePdf
+      ? [
+          {
+            filename: `Invoice-${displayId}.pdf`,
+            content: data.invoicePdf,
+            contentType: "application/pdf",
+          },
+        ]
+      : undefined,
   });
 }

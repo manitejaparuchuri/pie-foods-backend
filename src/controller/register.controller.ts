@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { isAuthFlowError, registerWithFirebaseAuth } from "../services/firebase-auth.service";
+import { notifyCustomerWelcome } from "../services/order-notifications.service";
 
 export const register = async (req: Request, res: Response) => {
   try {
@@ -23,6 +24,11 @@ export const register = async (req: Request, res: Response) => {
       { uid: user.uid, role: user.role, email: user.email },
       process.env.JWT_SECRET as string,
       { expiresIn: "1d" }
+    );
+
+    // Welcome email (best-effort, never blocks the response).
+    notifyCustomerWelcome(user.email || normalizedEmail, user.name || name).catch(
+      (err) => console.error("welcome notify (register) failed:", err)
     );
 
     return res.status(201).json({
