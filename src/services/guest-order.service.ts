@@ -163,7 +163,7 @@ export async function createGuestOrder(
     }))
   );
 
-  const totals = calculateTotalsFromSubtotal(subtotalPaise, 0);
+  const totals = calculateTotalsFromSubtotal(subtotalPaise, 0, paymentMethod);
 
   if (totals.totalAmount <= 0) {
     throw new Error("Order amount must be greater than zero");
@@ -211,6 +211,10 @@ export async function createGuestOrder(
     coupon_code: null,
     subtotal_amount: totals.subtotalAmount,
     coupon_discount_amount: 0,
+    shipping_amount: totals.shippingAmount,
+    cod_surcharge_amount: totals.codSurchargeAmount,
+    cgst_amount: totals.cgstAmount,
+    sgst_amount: totals.sgstAmount,
     final_amount: totals.totalAmount,
     total_amount: totals.totalAmount,
     items: itemsForStorage,

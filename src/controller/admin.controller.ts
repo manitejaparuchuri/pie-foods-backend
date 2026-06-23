@@ -527,12 +527,15 @@ const buildProductPayload = (
     ? 0
     : 1;
 
+  // Prices must be whole rupees only — decimals propagate all the way to
+  // Razorpay and result in awkward amounts like ₹458.62 in the payment modal.
+  // Round here on save so admins can't accidentally introduce sub-rupee prices.
   const payload: Record<string, unknown> = {
     product_id: productId,
     name: String(get("name", "") || "").trim(),
     sub_name: get("sub_name") ? String(get("sub_name")).trim() : null,
     description: get("description") ? String(get("description")).trim() : null,
-    price: Number(get("price", 0)) || 0,
+    price: Math.max(0, Math.round(Number(get("price", 0)) || 0)),
     stock_quantity: Number(get("stock_quantity", 0)) || 0,
     category_id: Number(get("category_id", 0)) || 0,
     is_active: isActiveRaw === 0 ? false : true,

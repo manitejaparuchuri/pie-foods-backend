@@ -132,7 +132,11 @@ class OrderService {
     const orderNumber = await generateOrderNumber();
 
     const result = await firestore.runTransaction(async (tx) => {
-      const preCouponTotals = calculateTotalsFromSubtotal(subtotalPaise, 0);
+      const preCouponTotals = calculateTotalsFromSubtotal(
+        subtotalPaise,
+        0,
+        normalizedPaymentMethod
+      );
       const appliedCoupon: AppliedCoupon | null = await validateCouponForAmount(
         tx,
         uid,
@@ -141,7 +145,8 @@ class OrderService {
       );
       const totals = calculateTotalsFromSubtotal(
         subtotalPaise,
-        appliedCoupon?.discountAmount || 0
+        appliedCoupon?.discountAmount || 0,
+        normalizedPaymentMethod
       );
 
       const orderRef = ordersCollection.doc();
@@ -169,6 +174,10 @@ class OrderService {
         coupon_code: appliedCoupon?.code || null,
         subtotal_amount: totals.subtotalAmount,
         coupon_discount_amount: totals.couponDiscountAmount,
+        shipping_amount: totals.shippingAmount,
+        cod_surcharge_amount: totals.codSurchargeAmount,
+        cgst_amount: totals.cgstAmount,
+        sgst_amount: totals.sgstAmount,
         final_amount: totals.totalAmount,
         total_amount: totals.totalAmount,
         items: itemsForStorage,

@@ -2,7 +2,7 @@ import { Request, Response } from "express";
 
 import { withCache } from "../config/cache";
 import firestoreCatalogService from "../services/catalog-firestore.service";
-import { CGST_RATE, ORDER_DISCOUNT_RATE, SGST_RATE } from "../services/pricing.service";
+import { INCLUSIVE_GST_RATE, ORDER_DISCOUNT_RATE } from "../services/pricing.service";
 
 const FIVE_MIN = 5 * 60 * 1000;
 const PUBLIC_CACHE_HEADER = "public, max-age=60, stale-while-revalidate=300";
@@ -29,7 +29,10 @@ export const getStorefrontSettings = async (_req: Request, res: Response) => {
     res.set("Cache-Control", PUBLIC_CACHE_HEADER);
     return res.json({
       order_discount_percent: round2(ORDER_DISCOUNT_RATE * 100),
-      gst_percent: round2((CGST_RATE + SGST_RATE) * 100),
+      // Prices are INCLUSIVE of GST — 5% is embedded inside the listed price,
+      // not added on top. The frontend uses this only for invoice-style display.
+      gst_percent: round2(INCLUSIVE_GST_RATE * 100),
+      gst_inclusive: true,
       trial_pack: normalizeTrialPack(trialPack),
     });
   } catch (error) {

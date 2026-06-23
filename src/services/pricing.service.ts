@@ -1,9 +1,35 @@
 export const ORDER_DISCOUNT_RATE = Number(process.env.ORDER_DISCOUNT_RATE || 0.2);
-export const CGST_RATE = Number(process.env.CGST_RATE || 0.09);
-export const SGST_RATE = Number(process.env.SGST_RATE || 0.09);
+
+/**
+ * GST model used by PIE Foods: all listed product prices are INCLUSIVE of
+ * 5% GST. We do NOT add tax on top of the discounted subtotal — the
+ * customer pays exactly what the price tag says. For invoice/compliance
+ * reporting we extract the embedded GST component (split 2.5% CGST / 2.5% SGST).
+ *
+ * Previously we used 9% CGST + 9% SGST = 18% added ON TOP. That was wrong:
+ * customers were being over-charged 18% beyond the listed price.
+ */
+export const INCLUSIVE_GST_RATE = Number(process.env.INCLUSIVE_GST_RATE || 0.05);
+
+/**
+ * Shipping rules:
+ *   • Cart total (subtotal − discount) >= ₹599 → free delivery
+ *   • Below threshold → flat ₹59 shipping fee
+ *   • COD orders → additional ₹39 cash-handling surcharge
+ *
+ * All three values are env-overridable so the business can tune without a
+ * code change.
+ */
+export const SHIPPING_FREE_THRESHOLD = Number(
+  process.env.SHIPPING_FREE_THRESHOLD || 599
+);
+export const SHIPPING_FEE = Number(process.env.SHIPPING_FEE || 59);
+export const COD_SURCHARGE = Number(process.env.COD_SURCHARGE || 39);
 
 const toPaise = (rupees: number): number => Math.round((Number(rupees) || 0) * 100);
 const fromPaise = (paise: number): number => Math.round((paise + Number.EPSILON)) / 100;
+
+export type PaymentMethodForPricing = "RAZORPAY" | "COD";
 
 export interface PricingInputItem {
   productId: number;
@@ -24,7 +50,11 @@ export interface PricingTotals {
   subtotalAmount: number;
   couponDiscountAmount: number;
   taxableSubtotalAmount: number;
+  shippingAmount: number;
+  codSurchargeAmount: number;
+  /** CGST 2.5% embedded inside the goods total (display-only). */
   cgstAmount: number;
+  /** SGST 2.5% embedded inside the goods total (display-only). */
   sgstAmount: number;
   totalAmount: number;
 }
@@ -72,19 +102,47 @@ export const buildPricedItemsAndSubtotal = (
 
 export const calculateTotalsFromSubtotal = (
   subtotalPaise: number,
-  couponDiscountRupees = 0
+  couponDiscountRupees = 0,
+  paymentMethod: PaymentMethodForPricing = "RAZORPAY"
 ): PricingTotals => {
   const subtotal = Math.max(0, subtotalPaise);
   const couponDiscountPaise = clampPaise(toPaise(couponDiscountRupees), 0, subtotal);
   const taxableSubtotalPaise = subtotal - couponDiscountPaise;
-  const cgstPaise = Math.round(taxableSubtotalPaise * CGST_RATE);
-  const sgstPaise = Math.round(taxableSubtotalPaise * SGST_RATE);
-  const totalPaise = taxableSubtotalPaise + cgstPaise + sgstPaise;
+  const taxableSubtotalRupees = fromPaise(taxableSubtotalPaise);
+
+  // Shipping rules: free at/above the threshold, flat fee below.
+  const shippingFeePaise =
+    taxableSubtotalRupees >= SHIPPING_FREE_THRESHOLD
+      ? 0
+      : toPaise(SHIPPING_FEE);
+
+  // COD surcharge layered on top of shipping.
+  const codSurchargePaise =
+    paymentMethod === "COD" ? toPaise(COD_SURCHARGE) : 0;
+
+  // The customer pays exactly (goods inclusive-of-GST) + shipping + COD.
+  // We round UP to whole rupees so Razorpay never shows decimals — anything
+  // smaller-than-a-rupee that lingers from legacy data gets absorbed here.
+  const grossPaise = taxableSubtotalPaise + shippingFeePaise + codSurchargePaise;
+  const totalRupees = Math.round(fromPaise(grossPaise));
+  const totalPaise = totalRupees * 100;
+
+  // Extract the embedded GST from the goods portion only (shipping isn't taxed
+  // here — the displayed shipping fee is already what the customer pays).
+  // base × (1 + rate) = goods → base = goods / 1.05 → gst = goods − base
+  const goodsRupees = taxableSubtotalRupees;
+  const goodsBaseRupees = goodsRupees / (1 + INCLUSIVE_GST_RATE);
+  const goodsGstRupees = goodsRupees - goodsBaseRupees;
+  const totalGstPaise = toPaise(goodsGstRupees);
+  const cgstPaise = Math.round(totalGstPaise / 2);
+  const sgstPaise = totalGstPaise - cgstPaise; // exact split
 
   return {
     subtotalAmount: fromPaise(subtotal),
     couponDiscountAmount: fromPaise(couponDiscountPaise),
-    taxableSubtotalAmount: fromPaise(taxableSubtotalPaise),
+    taxableSubtotalAmount: taxableSubtotalRupees,
+    shippingAmount: fromPaise(shippingFeePaise),
+    codSurchargeAmount: fromPaise(codSurchargePaise),
     cgstAmount: fromPaise(cgstPaise),
     sgstAmount: fromPaise(sgstPaise),
     totalAmount: fromPaise(totalPaise),
@@ -93,10 +151,15 @@ export const calculateTotalsFromSubtotal = (
 
 export const calculateOrderPricing = (
   items: PricingInputItem[],
-  couponDiscountRupees = 0
+  couponDiscountRupees = 0,
+  paymentMethod: PaymentMethodForPricing = "RAZORPAY"
 ): OrderPricingResult => {
   const { pricedItems, subtotalPaise } = buildPricedItemsAndSubtotal(items);
-  const totals = calculateTotalsFromSubtotal(subtotalPaise, couponDiscountRupees);
+  const totals = calculateTotalsFromSubtotal(
+    subtotalPaise,
+    couponDiscountRupees,
+    paymentMethod
+  );
 
   return {
     pricedItems,
