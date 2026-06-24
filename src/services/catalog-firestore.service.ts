@@ -29,6 +29,8 @@ type ProductRecord = {
   description?: string | null;
   price: number;
   discount_percent: number;
+  /** Per-product inclusive GST rate (e.g. 5, 12, 18). Defaults to 5 when missing. */
+  tax_percent: number;
   stock_quantity?: number | null;
   category_id?: number | null;
   category_name?: string | null;
@@ -500,6 +502,10 @@ function mapProductRecord(raw: Record<string, unknown>): ProductRecord {
       raw.discount_percent === undefined || raw.discount_percent === null
         ? DEFAULT_PRODUCT_DISCOUNT_PERCENT
         : clampNumber(raw.discount_percent, 0, 90, DEFAULT_PRODUCT_DISCOUNT_PERCENT),
+    tax_percent:
+      raw.tax_percent === undefined || raw.tax_percent === null
+        ? 5
+        : clampNumber(raw.tax_percent, 0, 50, 5),
     stock_quantity: normalizeNumber(raw.stock_quantity, 0),
     category_id: normalizeNumber(raw.category_id, 0),
     category_name: normalizeNullableString(raw.category_name),
