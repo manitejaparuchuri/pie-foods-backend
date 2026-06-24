@@ -1,7 +1,11 @@
 node_modules/
 dist/
 .env
+.env.bak
 *firebase-adminsdk*.json
 *serviceAccount*.json
 .env.yaml
 railway-env.txt
+
+# local test artifacts
+test-invoice.pdf

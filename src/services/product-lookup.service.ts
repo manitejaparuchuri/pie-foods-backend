@@ -9,6 +9,8 @@ export interface ProductSnapshot {
   price: number;
   /** Per-product discount (0..100), or null when the product predates the field. */
   discount_percent: number | null;
+  /** Per-product inclusive GST rate (e.g. 5, 12, 18). Defaults to 5 when missing. */
+  tax_percent: number;
   image_url: string | null;
 }
 
@@ -41,6 +43,7 @@ export async function fetchProductsByIds(
       const data = doc.data() as Record<string, unknown>;
       const productId = Number(data.product_id);
       if (!Number.isFinite(productId) || productId <= 0) continue;
+      const taxRaw = Number(data.tax_percent);
       map.set(productId, {
         product_id: productId,
         name: String(data.name || ""),
@@ -49,6 +52,8 @@ export async function fetchProductsByIds(
           data.discount_percent === undefined || data.discount_percent === null
             ? null
             : Number(data.discount_percent),
+        tax_percent:
+          Number.isFinite(taxRaw) && taxRaw >= 0 && taxRaw <= 50 ? taxRaw : 5,
         image_url: (data.image_url as string) || null,
       });
     }

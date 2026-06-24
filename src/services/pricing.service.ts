@@ -42,6 +42,9 @@ export interface PricingInputItem {
 export interface PricedItem {
   product_id: number;
   quantity: number;
+  /** The product's "printed" price BEFORE any discount — shown as MRP on the invoice. */
+  mrp: number;
+  /** Sale price after the configured discount (this is what the customer pays per unit). */
   discountedPrice: number;
   lineTotal: number;
 }
@@ -82,6 +85,7 @@ export const buildPricedItemsAndSubtotal = (
     return {
       product_id: item.productId,
       quantity,
+      mrpPaise,
       discountedPricePaise,
       lineTotalPaise,
     };
@@ -93,6 +97,7 @@ export const buildPricedItemsAndSubtotal = (
     pricedItems: pricedItems.map((item) => ({
       product_id: item.product_id,
       quantity: item.quantity,
+      mrp: fromPaise(item.mrpPaise),
       discountedPrice: fromPaise(item.discountedPricePaise),
       lineTotal: fromPaise(item.lineTotalPaise),
     })),

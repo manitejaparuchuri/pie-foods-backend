@@ -26,26 +26,39 @@ interface RawOrderItem {
   product_id?: number;
   name?: string;
   quantity?: number;
+  mrp?: number;
   price?: number;
+  tax_percent?: number;
   line_total?: number;
 }
 
 function toEmailItems(raw: unknown): Array<{
   name: string;
   quantity: number;
+  mrp?: number;
   price: number;
+  taxPercent?: number;
   lineTotal: number;
 }> {
   if (!Array.isArray(raw)) return [];
-  return raw.map((item: RawOrderItem) => ({
-    name: String(item.name || "Product"),
-    quantity: Number(item.quantity) || 0,
-    price: Number(item.price) || 0,
-    lineTotal:
-      Number(item.line_total) ||
-      Number(item.price) * Number(item.quantity) ||
-      0,
-  }));
+  return raw.map((item: RawOrderItem) => {
+    const price = Number(item.price) || 0;
+    // Older orders never snapshotted MRP / tax_percent; fall back to sensible
+    // defaults so the invoice keeps rendering without spurious discounts.
+    const mrp = Number(item.mrp) > 0 ? Number(item.mrp) : price;
+    const taxRaw = Number(item.tax_percent);
+    const taxPercent =
+      Number.isFinite(taxRaw) && taxRaw >= 0 && taxRaw <= 50 ? taxRaw : 5;
+    return {
+      name: String(item.name || "Product"),
+      quantity: Number(item.quantity) || 0,
+      mrp,
+      price,
+      taxPercent,
+      lineTotal:
+        Number(item.line_total) || price * (Number(item.quantity) || 0) || 0,
+    };
+  });
 }
 
 async function loadAddress(

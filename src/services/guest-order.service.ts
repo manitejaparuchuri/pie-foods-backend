@@ -144,6 +144,7 @@ export async function createGuestOrder(
         quantity: Number(i.quantity),
         mrpRupees: product.price,
         discountPercent: product.discount_percent,
+        taxPercent: product.tax_percent,
         name: product.name,
         imageUrl: product.image_url,
       };
@@ -176,7 +177,9 @@ export async function createGuestOrder(
       name: meta?.name || "Product",
       image_url: meta?.imageUrl || null,
       quantity: priced.quantity,
+      mrp: priced.mrp,
       price: priced.discountedPrice,
+      tax_percent: meta?.taxPercent ?? 5,
       line_total: priced.lineTotal,
     };
   });

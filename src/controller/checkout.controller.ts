@@ -101,7 +101,9 @@ export const checkout = async (req: AuthRequest, res: Response) => {
           name: product?.name || "",
           image_url: product?.image_url || null,
           quantity: priced.quantity,
+          mrp: priced.mrp,
           price: priced.discountedPrice,
+          tax_percent: product?.tax_percent ?? 5,
           line_total: priced.lineTotal,
         };
       });

@@ -548,6 +548,18 @@ const buildProductPayload = (
     payload.discount_percent = get("discount_percent");
   }
 
+  // GST rate is now per-product. Stored on the product doc so admin can pick
+  // 5%, 12%, 18% etc per item; snapshotted onto every order item at order time.
+  // Falls back to 5% (the food default) when the admin leaves it blank.
+  if (
+    Object.prototype.hasOwnProperty.call(body, "tax_percent") ||
+    (existing && Object.prototype.hasOwnProperty.call(existing, "tax_percent"))
+  ) {
+    const raw = Number(get("tax_percent", 5));
+    payload.tax_percent =
+      Number.isFinite(raw) && raw >= 0 && raw <= 50 ? raw : 5;
+  }
+
   if (
     Object.prototype.hasOwnProperty.call(body, "is_bestseller") ||
     (existing && Object.prototype.hasOwnProperty.call(existing, "is_bestseller"))

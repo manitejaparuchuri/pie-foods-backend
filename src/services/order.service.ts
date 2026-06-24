@@ -56,6 +56,8 @@ interface CartLineForOrder {
   product_id: number;
   quantity: number;
   price: number;
+  /** Per-product GST rate to snapshot onto the order item for invoice rendering. */
+  tax_percent: number;
   name: string;
   image_url: string | null;
 }
@@ -81,6 +83,7 @@ async function loadCartLines(uid: string): Promise<CartLineForOrder[]> {
         product_id: productId,
         quantity: Number(data.quantity) || 0,
         price: product.price,
+        tax_percent: product.tax_percent,
         name: product.name,
         image_url: product.image_url,
       };
@@ -157,7 +160,11 @@ class OrderService {
           name: cartLine?.name || "",
           image_url: cartLine?.image_url || null,
           quantity: priced.quantity,
+          // Snapshotted on the order so the invoice keeps rendering correctly
+          // even if the underlying product's MRP/tax rate changes later.
+          mrp: priced.mrp,
           price: priced.discountedPrice,
+          tax_percent: cartLine?.tax_percent ?? 5,
           line_total: priced.lineTotal,
         };
       });
