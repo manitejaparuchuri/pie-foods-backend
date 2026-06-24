@@ -128,6 +128,10 @@ type ProductWritePayload = {
   description?: string | null;
   price: number;
   discount_percent?: number | string | null;
+  /** Per-product GST rate (0..50). REQUIRED on the contract — upsertProduct
+   *  treats `undefined` as "keep existing"; an invalid value falls back to
+   *  whatever was already on the doc (after the backfill, that's a real rate). */
+  tax_percent?: number | string | null;
   stock_quantity?: number | null;
   category_id?: number | null;
   category_name?: string | null;
@@ -502,10 +506,28 @@ function mapProductRecord(raw: Record<string, unknown>): ProductRecord {
       raw.discount_percent === undefined || raw.discount_percent === null
         ? DEFAULT_PRODUCT_DISCOUNT_PERCENT
         : clampNumber(raw.discount_percent, 0, 90, DEFAULT_PRODUCT_DISCOUNT_PERCENT),
-    tax_percent:
-      raw.tax_percent === undefined || raw.tax_percent === null
-        ? 5
-        : clampNumber(raw.tax_percent, 0, 50, 5),
+    // tax_percent should be set on every product (backfill ensures this and
+    // the strict admin save enforces it going forward). The 5% defensive
+    // fallback is a last-resort safety net so a missing-data accident can't
+    // break product listings — but it's also a bug indicator: log loudly so
+    // we notice if any doc slips through without a tax rate.
+    tax_percent: (() => {
+      if (raw.tax_percent === undefined || raw.tax_percent === null) {
+        console.warn(
+          `[catalog] product ${raw.product_id} missing tax_percent — defaulting to 5. ` +
+            `Run scripts/backfill-tax-percent.ts and verify the admin save.`
+        );
+        return 5;
+      }
+      const n = Number(raw.tax_percent);
+      if (!Number.isFinite(n) || n < 0 || n > 50) {
+        console.warn(
+          `[catalog] product ${raw.product_id} tax_percent=${JSON.stringify(raw.tax_percent)} is invalid — defaulting to 5.`
+        );
+        return 5;
+      }
+      return n;
+    })(),
     stock_quantity: normalizeNumber(raw.stock_quantity, 0),
     category_id: normalizeNumber(raw.category_id, 0),
     category_name: normalizeNullableString(raw.category_name),
@@ -979,6 +1001,19 @@ class FirestoreCatalogService {
         payload.discount_percent === undefined || payload.discount_percent === null
           ? existingProduct?.discount_percent ?? DEFAULT_PRODUCT_DISCOUNT_PERCENT
           : clampNumber(payload.discount_percent, 0, 90, DEFAULT_PRODUCT_DISCOUNT_PERCENT),
+      // Per-product GST rate. PRE-VERIFY FIX: this was missing from the
+      // explicit allowlist below, so every admin save silently dropped the
+      // tax_percent the controller validated. Now: prefer the payload's
+      // value when it's a valid number in [0, 50]; otherwise keep the
+      // existing doc's rate (backfill guarantees that exists for legacy).
+      tax_percent: (() => {
+        const raw = payload.tax_percent;
+        if (raw !== undefined && raw !== null && raw !== "") {
+          const n = Number(raw);
+          if (Number.isFinite(n) && n >= 0 && n <= 50) return n;
+        }
+        return existingProduct?.tax_percent ?? 5;
+      })(),
       stock_quantity: normalizeNumber(payload.stock_quantity, 0),
       category_id: categoryId,
       category_name: normalizeNullableString(payload.category_name) || category?.name || null,

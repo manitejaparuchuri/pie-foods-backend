@@ -44,6 +44,15 @@ export async function fetchProductsByIds(
       const productId = Number(data.product_id);
       if (!Number.isFinite(productId) || productId <= 0) continue;
       const taxRaw = Number(data.tax_percent);
+      const taxValid =
+        Number.isFinite(taxRaw) && taxRaw >= 0 && taxRaw <= 50;
+      if (!taxValid) {
+        console.warn(
+          `[product-lookup] product ${productId} missing/invalid tax_percent=${JSON.stringify(
+            data.tax_percent
+          )} — defaulting to 5. Run scripts/backfill-tax-percent.ts.`
+        );
+      }
       map.set(productId, {
         product_id: productId,
         name: String(data.name || ""),
@@ -52,8 +61,7 @@ export async function fetchProductsByIds(
           data.discount_percent === undefined || data.discount_percent === null
             ? null
             : Number(data.discount_percent),
-        tax_percent:
-          Number.isFinite(taxRaw) && taxRaw >= 0 && taxRaw <= 50 ? taxRaw : 5,
+        tax_percent: taxValid ? taxRaw : 5,
         image_url: (data.image_url as string) || null,
       });
     }

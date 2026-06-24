@@ -42,6 +42,11 @@ async function getCartRowsForUser(uid: string) {
       name: product?.name || "",
       price: product?.price || 0,
       discount_percent: product?.discount_percent ?? null,
+      // Per-product GST rate — restoring this lets the frontend cart compute
+      // the right embedded GST after a page reload (logged-in users hit this
+      // endpoint to rehydrate their cart). Otherwise checkout falls back to
+      // the storefront global rate and shows the wrong %.
+      tax_percent: product?.tax_percent ?? null,
       image_url: product?.image_url || null,
     };
   });
@@ -134,6 +139,8 @@ export const getCartItemById = async (req: AuthRequest, res: Response) => {
       added_at: addedAt ? addedAt.toDate().toISOString() : null,
       name: product?.name || "",
       price: product?.price || 0,
+      discount_percent: product?.discount_percent ?? null,
+      tax_percent: product?.tax_percent ?? null,
       image_url: product?.image_url || null,
     });
   } catch (error) {

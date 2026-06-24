@@ -548,16 +548,22 @@ const buildProductPayload = (
     payload.discount_percent = get("discount_percent");
   }
 
-  // GST rate is now per-product. Stored on the product doc so admin can pick
-  // 5%, 12%, 18% etc per item; snapshotted onto every order item at order time.
-  // Falls back to 5% (the food default) when the admin leaves it blank.
-  if (
-    Object.prototype.hasOwnProperty.call(body, "tax_percent") ||
-    (existing && Object.prototype.hasOwnProperty.call(existing, "tax_percent"))
-  ) {
-    const raw = Number(get("tax_percent", 5));
-    payload.tax_percent =
-      Number.isFinite(raw) && raw >= 0 && raw <= 50 ? raw : 5;
+  // GST rate is per-product. Stored on the product doc so admin can pick 5%,
+  // 12%, 18% etc per item; snapshotted onto every order item at order time.
+  //
+  // STRICT: when the body carries tax_percent, the value MUST be a finite
+  // number in [0, 50]. The controllers (createProduct/updateProduct) reject
+  // before they reach here when the field is missing/invalid on create, so
+  // by the time we get to buildProductPayload either:
+  //   (a) body has a valid tax_percent → write it, OR
+  //   (b) body omits tax_percent but `existing` already has it → preserve
+  //       (skip writing; merge:true on upsert keeps the existing value).
+  // There is no silent fallback to 5 anymore — the admin must choose a rate.
+  if (Object.prototype.hasOwnProperty.call(body, "tax_percent")) {
+    const raw = Number(get("tax_percent"));
+    if (Number.isFinite(raw) && raw >= 0 && raw <= 50) {
+      payload.tax_percent = raw;
+    }
   }
 
   if (
@@ -583,15 +589,33 @@ const buildProductPayload = (
   return payload as any;
 };
 
+/** Strict tax_percent parser. Returns the number when valid; null otherwise.
+ *  Used by createProduct (always required) and updateProduct (only when the
+ *  body explicitly includes the field). */
+const parseTaxPercentStrict = (raw: unknown): number | null => {
+  if (raw === undefined || raw === null || raw === "") return null;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return null;
+  if (n < 0 || n > 50) return null;
+  return n;
+};
+
 export const createProduct = async (req: Request, res: Response) => {
   const name = String(req.body?.name || "").trim();
   const categoryId = parsePositiveInt(req.body?.category_id);
   const price = parseNonNegativeNumber(req.body?.price);
   const stockQuantity = parseNonNegativeInt(req.body?.stock_quantity);
+  const taxPercent = parseTaxPercentStrict(req.body?.tax_percent);
 
   if (!name || !categoryId || price === null || stockQuantity === null) {
     return res.status(400).json({
       message: "name, category_id, price and stock_quantity are required",
+    });
+  }
+
+  if (taxPercent === null) {
+    return res.status(400).json({
+      message: "tax_percent is required (must be a number between 0 and 50)",
     });
   }
 
@@ -642,6 +666,19 @@ export const updateProduct = async (req: Request, res: Response) => {
     const category = await firestoreCatalogService.getCategoryById(categoryId);
     if (!category) {
       return res.status(400).json({ message: "Invalid category_id" });
+    }
+
+    // If the body includes tax_percent, validate strictly. If it omits the
+    // field, leave the existing value in place (admin can edit other fields
+    // without touching tax). After backfill every product has a valid value,
+    // so an Update without tax_percent is safe.
+    if (Object.prototype.hasOwnProperty.call(req.body, "tax_percent")) {
+      const taxPercent = parseTaxPercentStrict(req.body.tax_percent);
+      if (taxPercent === null) {
+        return res.status(400).json({
+          message: "tax_percent must be a number between 0 and 50",
+        });
+      }
     }
 
     const payload = buildProductPayload(req.body, productId, existing as any);
