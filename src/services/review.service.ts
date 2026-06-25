@@ -76,6 +76,31 @@ export const getProductReviewsService = async (
   return rows.map(({ review_date_ms: _ms, ...rest }) => rest);
 };
 
+/** Newest reviews across all products — powers the home "customers say" wall. */
+export const getRecentReviewsService = async (
+  limit = 12
+): Promise<ReviewRecord[]> => {
+  const capped = Math.max(1, Math.min(50, Number(limit) || 12));
+  const snap = await reviewsCollection
+    .orderBy("review_date", "desc")
+    .limit(capped)
+    .get();
+
+  return snap.docs.map((doc) => {
+    const data = doc.data() as Record<string, unknown>;
+    const reviewDate = data.review_date as Timestamp | undefined;
+    return {
+      review_id: doc.id,
+      user_id: String(data.user_id || ""),
+      user_name: String(data.user_name || "Customer"),
+      product_id: String(data.product_id || ""),
+      rating: Number(data.rating) || 0,
+      comment: String(data.comment || ""),
+      review_date: reviewDate ? reviewDate.toDate().toISOString() : "",
+    };
+  });
+};
+
 export const updateReviewService = async (
   uid: string,
   reviewId: string,

@@ -58,6 +58,16 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ message: error.message });
     }
 
+    const stockMsg = String(error?.message || "");
+    if (
+      stockMsg.startsWith("Insufficient stock") ||
+      stockMsg.startsWith("Product no longer available")
+    ) {
+      return res.status(409).json({
+        message: "Sorry, an item just went out of stock. Please review your cart.",
+      });
+    }
+
     return res.status(500).json({ message: "Failed to create order" });
   }
 };

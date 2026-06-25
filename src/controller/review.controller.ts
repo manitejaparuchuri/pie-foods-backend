@@ -3,6 +3,7 @@ import { AuthRequest } from "../middlewares/auth";
 import {
   addReviewService,
   getProductReviewsService,
+  getRecentReviewsService,
   updateReviewService,
   deleteReviewService,
 } from "../services/review.service";
@@ -50,6 +51,16 @@ export const getProductReviews = async (req: Request, res: Response) => {
     }
 
     const reviews = await getProductReviewsService(productId);
+    res.json(reviews);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch reviews" });
+  }
+};
+
+export const getRecentReviews = async (req: Request, res: Response) => {
+  try {
+    const limit = Number(req.query.limit) || 12;
+    const reviews = await getRecentReviewsService(limit);
     res.json(reviews);
   } catch (error) {
     res.status(500).json({ message: "Failed to fetch reviews" });

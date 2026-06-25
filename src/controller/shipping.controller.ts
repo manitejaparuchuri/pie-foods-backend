@@ -32,6 +32,7 @@ export const addShippingAddress = async (req: AuthRequest, res: Response) => {
       postal_code: String(postal_code),
       country: String(country ?? "India"),
       phone: phone ? String(phone) : null,
+      is_default: req.body?.is_default === true,
       created_at: Timestamp.now(),
     });
 
@@ -65,6 +66,7 @@ export const getShippingByUser = async (req: AuthRequest, res: Response) => {
         postal_code: String(data.postal_code || ""),
         country: String(data.country || "India"),
         phone: data.phone ? String(data.phone) : null,
+        is_default: data.is_default === true,
         created_at: createdAt ? createdAt.toDate().toISOString() : null,
       };
     });
@@ -73,5 +75,89 @@ export const getShippingByUser = async (req: AuthRequest, res: Response) => {
   } catch (error: any) {
     console.error("GET SHIPPING ERROR:", error);
     res.status(500).json({ error: "Failed to load shipping addresses" });
+  }
+};
+
+export const updateShippingAddress = async (req: AuthRequest, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ error: "Unauthorized" });
+
+    const id = String(req.params.id || "").trim();
+    if (!id) return res.status(400).json({ error: "Invalid address id" });
+
+    const { address, city, state, postal_code, country, phone } = req.body;
+    if (!address || !city || !state || !postal_code) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const ref = addressesCollection(uid).doc(id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: "Address not found" });
+
+    await ref.update({
+      address: String(address),
+      city: String(city),
+      state: String(state),
+      postal_code: String(postal_code),
+      country: String(country ?? "India"),
+      phone: phone ? String(phone) : null,
+      updated_at: Timestamp.now(),
+    });
+
+    return res.json({ message: "Address updated", shipping_id: id });
+  } catch (err: any) {
+    console.error("UPDATE SHIPPING ERROR:", err);
+    return res.status(500).json({ error: "Failed to update address" });
+  }
+};
+
+export const deleteShippingAddress = async (req: AuthRequest, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ error: "Unauthorized" });
+
+    const id = String(req.params.id || "").trim();
+    if (!id) return res.status(400).json({ error: "Invalid address id" });
+
+    const ref = addressesCollection(uid).doc(id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: "Address not found" });
+
+    await ref.delete();
+    return res.json({ message: "Address removed", shipping_id: id });
+  } catch (err: any) {
+    console.error("DELETE SHIPPING ERROR:", err);
+    return res.status(500).json({ error: "Failed to remove address" });
+  }
+};
+
+export const setDefaultAddress = async (req: AuthRequest, res: Response) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ error: "Unauthorized" });
+
+    const id = String(req.params.id || "").trim();
+    if (!id) return res.status(400).json({ error: "Invalid address id" });
+
+    const ref = addressesCollection(uid).doc(id);
+    const snap = await ref.get();
+    if (!snap.exists) return res.status(404).json({ error: "Address not found" });
+
+    // Flip is_default so exactly one address is the default.
+    const all = await addressesCollection(uid).get();
+    const batch = firestore.batch();
+    all.docs.forEach((doc) => {
+      batch.update(doc.ref, {
+        is_default: doc.id === id,
+        updated_at: Timestamp.now(),
+      });
+    });
+    await batch.commit();
+
+    return res.json({ message: "Default address set", shipping_id: id });
+  } catch (err: any) {
+    console.error("SET DEFAULT SHIPPING ERROR:", err);
+    return res.status(500).json({ error: "Failed to set default address" });
   }
 };

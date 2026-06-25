@@ -11,9 +11,11 @@ import {
   calculateTotalsFromSubtotal,
 } from "./pricing.service";
 import { fetchProductsByIds } from "./product-lookup.service";
+import { getFirestoreProductsCollectionName } from "../config/catalog";
 
 const ordersCollection = firestore.collection("orders");
 const usersCollection = firestore.collection("users");
+const productsCollection = firestore.collection(getFirestoreProductsCollectionName());
 
 interface CreateOrderResult {
   orderId: string;
@@ -108,7 +110,11 @@ class OrderService {
   ): Promise<CreateOrderResult> {
     const normalizedPaymentMethod: PaymentMethod =
       paymentMethod === "COD" ? "COD" : "RAZORPAY";
-    const orderStatus = "PENDING_PAYMENT";
+    // COD has no payment step, so the order is confirmed on placement and goes
+    // straight to PROCESSING. Prepaid orders wait in PENDING_PAYMENT until the
+    // Razorpay payment is verified.
+    const orderStatus =
+      normalizedPaymentMethod === "COD" ? "PROCESSING" : "PENDING_PAYMENT";
 
     const shippingRef = usersCollection.doc(uid).collection("addresses").doc(shippingId);
     const shippingSnap = await shippingRef.get();
@@ -152,6 +158,28 @@ class OrderService {
         normalizedPaymentMethod
       );
 
+      // COD: reserve stock now (atomic, reads-before-writes). Prepaid orders
+      // decrement stock later, at payment verification.
+      const isCod = normalizedPaymentMethod === "COD";
+      const stockRefs = isCod
+        ? pricedItems.map((line) => productsCollection.doc(`product-${line.product_id}`))
+        : [];
+      const stockSnaps = isCod
+        ? await Promise.all(stockRefs.map((ref) => tx.get(ref)))
+        : [];
+      if (isCod) {
+        stockSnaps.forEach((snap, idx) => {
+          const line = pricedItems[idx];
+          if (!snap.exists) {
+            throw new Error(`Product no longer available: ${line.product_id}`);
+          }
+          const stock = Number((snap.data() as Record<string, unknown>).stock_quantity ?? 0);
+          if (stock < line.quantity) {
+            throw new Error(`Insufficient stock for product ${line.product_id}`);
+          }
+        });
+      }
+
       const orderRef = ordersCollection.doc();
       const itemsForStorage = pricedItems.map((priced) => {
         const cartLine = cartLines.find((line) => line.product_id === priced.product_id);
@@ -194,6 +222,16 @@ class OrderService {
 
       if (appliedCoupon) {
         await consumeCoupon(tx, uid, orderRef.id, appliedCoupon);
+      }
+
+      if (isCod) {
+        stockSnaps.forEach((snap, idx) => {
+          const stock = Number((snap.data() as Record<string, unknown>).stock_quantity ?? 0);
+          tx.update(stockRefs[idx], {
+            stock_quantity: stock - pricedItems[idx].quantity,
+            updated_at: Timestamp.now(),
+          });
+        });
       }
 
       return {

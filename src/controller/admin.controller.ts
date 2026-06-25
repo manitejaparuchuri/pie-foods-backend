@@ -586,6 +586,14 @@ const buildProductPayload = (
     }
   }
 
+  // Rich product copy (benefits / ingredients / nutrition) — forwarded to
+  // upsertProduct, which normalizes + stores them. Only sent when present.
+  for (const key of ["benefits", "ingredients", "nutrition"]) {
+    if (Object.prototype.hasOwnProperty.call(body, key)) {
+      payload[key] = body[key];
+    }
+  }
+
   return payload as any;
 };
 

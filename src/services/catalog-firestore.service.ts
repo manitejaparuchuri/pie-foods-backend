@@ -41,6 +41,9 @@ type ProductRecord = {
   image_url3?: string | null;
   image_url4?: string | null;
   image_url5?: string | null;
+  benefits?: string[];
+  ingredients?: string[];
+  nutrition?: { label: string; value: string }[];
   is_bestseller?: boolean;
   created_at?: Timestamp | Date | string | null;
   updated_at?: Timestamp | Date | string | null;
@@ -147,6 +150,9 @@ type ProductWritePayload = {
   image_url8?: string | null;
   image_url9?: string | null;
   image_url10?: string | null;
+  benefits?: unknown;
+  ingredients?: unknown;
+  nutrition?: unknown;
   is_bestseller?: boolean | number | string | null;
   is_active?: boolean | number | null;
   created_at?: Timestamp | Date | string | null;
@@ -494,6 +500,24 @@ function mapCategoryRecord(raw: Record<string, unknown>): CategoryRecord {
   };
 }
 
+function normalizeStringArray(value: unknown): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  const arr = Array.isArray(value) ? value : String(value).split(/\r?\n/);
+  return arr.map((v) => String(v).trim()).filter(Boolean);
+}
+
+function normalizeNutrition(
+  value: unknown
+): { label: string; value: string }[] | undefined {
+  if (value === undefined || value === null || !Array.isArray(value)) return undefined;
+  return value
+    .map((entry) => {
+      const e = (entry || {}) as Record<string, unknown>;
+      return { label: String(e.label ?? "").trim(), value: String(e.value ?? "").trim() };
+    })
+    .filter((e) => e.label || e.value);
+}
+
 function mapProductRecord(raw: Record<string, unknown>): ProductRecord {
   return {
     product_id: normalizeNumber(raw.product_id),
@@ -538,6 +562,9 @@ function mapProductRecord(raw: Record<string, unknown>): ProductRecord {
     image_url3: normalizeNullableString(raw.image_url3),
     image_url4: normalizeNullableString(raw.image_url4),
     image_url5: normalizeNullableString(raw.image_url5),
+    benefits: (() => { const a = normalizeStringArray(raw.benefits); return a && a.length ? a : undefined; })(),
+    ingredients: (() => { const a = normalizeStringArray(raw.ingredients); return a && a.length ? a : undefined; })(),
+    nutrition: (() => { const a = normalizeNutrition(raw.nutrition); return a && a.length ? a : undefined; })(),
     is_bestseller: raw.is_bestseller === true || Number(raw.is_bestseller) === 1,
     created_at:
       raw.created_at instanceof Timestamp || raw.created_at instanceof Date || typeof raw.created_at === "string"
@@ -1034,6 +1061,15 @@ class FirestoreCatalogService {
       created_at: existingProduct?.created_at || toFirestoreDate(payload.created_at),
       updated_at: Timestamp.now(),
     };
+
+    // Rich product copy — only written when the admin actually sends the field
+    // (merge:true preserves existing values otherwise). An empty array clears it.
+    const benefits = normalizeStringArray(payload.benefits);
+    if (benefits !== undefined) productData.benefits = benefits;
+    const ingredients = normalizeStringArray(payload.ingredients);
+    if (ingredients !== undefined) productData.ingredients = ingredients;
+    const nutrition = normalizeNutrition(payload.nutrition);
+    if (nutrition !== undefined) productData.nutrition = nutrition;
 
     await this.productsCollection.doc(`product-${productId}`).set(productData, { merge: true });
     return mapProductRecord(productData);

@@ -2,6 +2,7 @@ import { Router } from "express";
 import {
   addReview,
   getProductReviews,
+  getRecentReviews,
   updateReview,
   deleteReview
 } from "../controller/review.controller";
@@ -11,6 +12,9 @@ const router = Router();
 
 // Add review
 router.post("/", verifyToken, addReview);
+
+// Newest reviews across all products (home page). Literal path, keep before params.
+router.get("/recent", getRecentReviews);
 
 // Get reviews for a product
 router.get("/product/:productId", getProductReviews);

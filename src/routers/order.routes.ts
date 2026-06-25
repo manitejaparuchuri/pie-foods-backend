@@ -7,6 +7,7 @@ import {
   getGuestOrderController,
 } from '../controller/guest-order.controller';
 import { verifyToken } from '../middlewares/auth';
+import { downloadInvoice, downloadGuestInvoice } from '../controller/invoice.controller';
 
 const router = Router();
 
@@ -32,12 +33,14 @@ const guestOrderReadLimiter = rateLimit({
 // isn't captured as an order id.
 router.post('/guest', guestOrderIpLimiter, createGuestOrderController);
 router.get('/guest/:id', guestOrderReadLimiter, getGuestOrderController);
+router.get('/guest/:id/invoice', guestOrderReadLimiter, downloadGuestInvoice);
 
 router.post('/', verifyToken, createOrder);
 router.get('/my', verifyToken, getMyOrders);
 // Order tracking — pulls live status from Delhivery when waybill exists.
 // Keep BEFORE /:id so the literal "track" segment is not captured as an id.
 router.get('/:id/track', verifyToken, trackOrder);
+router.get('/:id/invoice', verifyToken, downloadInvoice);
 // Single-order fetch — owner-only (admins always allowed). Keep AFTER /my so
 // the literal route wins over the :id param.
 router.get('/:id', verifyToken, getOrderById);

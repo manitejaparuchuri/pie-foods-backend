@@ -90,6 +90,14 @@ export const createGuestOrderController = async (
     if (safe.has(message)) {
       return res.status(400).json({ message });
     }
+    if (
+      message.startsWith("Insufficient stock") ||
+      message.startsWith("Product no longer available")
+    ) {
+      return res.status(409).json({
+        message: "Sorry, an item just went out of stock. Please review your cart.",
+      });
+    }
     return res.status(500).json({ message: "Failed to create guest order" });
   }
 };

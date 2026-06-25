@@ -7,6 +7,7 @@ import {
   calculateTotalsFromSubtotal,
 } from "./pricing.service";
 import { fetchProductsByIds } from "./product-lookup.service";
+import { getFirestoreProductsCollectionName } from "../config/catalog";
 
 /* ===================================================================
    Guest Order Service
@@ -24,6 +25,7 @@ import { fetchProductsByIds } from "./product-lookup.service";
    =================================================================== */
 
 const ordersCollection = firestore.collection("orders");
+const productsCollection = firestore.collection(getFirestoreProductsCollectionName());
 
 export interface GuestCartItem {
   productId: number;
@@ -187,8 +189,10 @@ export async function createGuestOrder(
   const guestAccessToken = generateAccessToken();
   const orderRef = ordersCollection.doc();
   const orderNumber = await generateOrderNumber();
+  // COD orders are confirmed on placement (no payment step) → PROCESSING.
+  const orderStatus = paymentMethod === "COD" ? "PROCESSING" : "PENDING_PAYMENT";
 
-  await orderRef.set({
+  const orderData = {
     order_id: orderRef.id,
     order_number: orderNumber,
     user_id: null,
@@ -207,7 +211,7 @@ export async function createGuestOrder(
       country: String(input.address.country || "India").trim(),
     },
     shipping_id: null,
-    status: "PENDING_PAYMENT",
+    status: orderStatus,
     payment_method: paymentMethod,
     provider_order_id: null,
     coupon_id: null,
@@ -223,7 +227,37 @@ export async function createGuestOrder(
     items: itemsForStorage,
     order_date: Timestamp.now(),
     updated_at: Timestamp.now(),
-  });
+  };
+
+  if (paymentMethod === "COD") {
+    // COD: reserve stock atomically at creation since no payment step follows.
+    await firestore.runTransaction(async (tx) => {
+      const stockRefs = pricedItems.map((line) =>
+        productsCollection.doc(`product-${line.product_id}`)
+      );
+      const stockSnaps = await Promise.all(stockRefs.map((ref) => tx.get(ref)));
+      stockSnaps.forEach((snap, idx) => {
+        const line = pricedItems[idx];
+        if (!snap.exists) {
+          throw new Error(`Product no longer available: ${line.product_id}`);
+        }
+        const stock = Number((snap.data() as Record<string, unknown>).stock_quantity ?? 0);
+        if (stock < line.quantity) {
+          throw new Error(`Insufficient stock for product ${line.product_id}`);
+        }
+      });
+      tx.set(orderRef, orderData);
+      stockSnaps.forEach((snap, idx) => {
+        const stock = Number((snap.data() as Record<string, unknown>).stock_quantity ?? 0);
+        tx.update(stockRefs[idx], {
+          stock_quantity: stock - pricedItems[idx].quantity,
+          updated_at: Timestamp.now(),
+        });
+      });
+    });
+  } else {
+    await orderRef.set(orderData);
+  }
 
   return {
     orderId: orderRef.id,
@@ -232,7 +266,7 @@ export async function createGuestOrder(
     totalAmount: totals.totalAmount,
     subtotalAmount: totals.subtotalAmount,
     paymentMethod,
-    status: "PENDING_PAYMENT",
+    status: orderStatus,
   };
 }
 
