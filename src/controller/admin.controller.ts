@@ -1028,6 +1028,45 @@ export const updateTrialPack = async (req: Request, res: Response) => {
   }
 };
 
+/* ========================= SHIPPING CONFIG ========================= */
+
+const normalizeFirestoreShippingConfigForAdmin = (config: any) => ({
+  shipping_fee: Number(config.shipping_fee) || 0,
+  free_shipping_threshold: Number(config.free_shipping_threshold) || 0,
+  cod_surcharge: Number(config.cod_surcharge) || 0,
+  updated_at: toIsoString(config.updated_at),
+});
+
+export const updateShippingConfig = async (req: Request, res: Response) => {
+  // Each field is optional — an omitted field keeps the existing value (or the
+  // default). When present it MUST be a non-negative number.
+  const fields = ["shipping_fee", "free_shipping_threshold", "cod_surcharge"] as const;
+  const payload: Record<string, number> = {};
+  for (const field of fields) {
+    const raw = req.body?.[field];
+    if (raw === undefined || raw === null || raw === "") continue;
+    const parsed = parseNonNegativeNumber(raw);
+    if (parsed === null) {
+      return res
+        .status(400)
+        .json({ message: `${field} must be a non-negative number` });
+    }
+    payload[field] = parsed;
+  }
+
+  try {
+    const config = await firestoreCatalogService.upsertShippingConfig(payload);
+    invalidateCatalog();
+    return res.json({
+      message: "Shipping config updated",
+      shipping: normalizeFirestoreShippingConfigForAdmin(config),
+    });
+  } catch (error) {
+    console.error("UPDATE SHIPPING CONFIG ERROR:", error);
+    return res.status(500).json({ message: "Unable to update shipping config" });
+  }
+};
+
 /* ============================ COUPONS ============================ */
 
 const normalizeFirestoreCouponForAdmin = (

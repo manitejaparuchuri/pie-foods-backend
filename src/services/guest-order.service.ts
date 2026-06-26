@@ -7,7 +7,22 @@ import {
   calculateTotalsFromSubtotal,
 } from "./pricing.service";
 import { fetchProductsByIds } from "./product-lookup.service";
+import {
+  notifyAdminOrderReceived,
+  notifyCustomerOrderConfirmed,
+} from "./order-notifications.service";
 import { getFirestoreProductsCollectionName } from "../config/catalog";
+import firestoreCatalogService from "./catalog-firestore.service";
+
+/** Map the Firestore shipping-config doc onto the pricing engine override. */
+const loadPricingShippingConfig = async () => {
+  const cfg = await firestoreCatalogService.getShippingConfig();
+  return {
+    shippingFee: cfg.shipping_fee,
+    freeShippingThreshold: cfg.free_shipping_threshold,
+    codSurcharge: cfg.cod_surcharge,
+  };
+};
 
 /* ===================================================================
    Guest Order Service
@@ -43,7 +58,8 @@ export interface GuestShippingAddress {
 }
 
 export interface GuestOrderInput {
-  email: string;
+  /** Optional — customers may check out without an email. */
+  email?: string;
   name: string;
   phone: string;
   address: GuestShippingAddress;
@@ -75,9 +91,11 @@ export function validateGuestOrderInput(
   if (!input || typeof input !== "object") {
     return { ok: false, error: "Invalid request body" };
   }
+  // Email is OPTIONAL. Allow an empty email (the customer confirmation email
+  // no-ops when it's missing). Only a non-empty, malformed email is rejected.
   const email = String(input.email || "").trim().toLowerCase();
-  if (!EMAIL_RE.test(email)) {
-    return { ok: false, error: "A valid email is required" };
+  if (email && !EMAIL_RE.test(email)) {
+    return { ok: false, error: "Please enter a valid email" };
   }
   const name = String(input.name || "").trim();
   if (name.length < 2) {
@@ -126,7 +144,8 @@ export function validateGuestOrderInput(
 export async function createGuestOrder(
   input: GuestOrderInput
 ): Promise<GuestOrderResult> {
-  const email = String(input.email).trim().toLowerCase();
+  // Email is optional — stored as "" when the customer didn't provide one.
+  const email = String(input.email || "").trim().toLowerCase();
   const name = String(input.name).trim();
   const phone = String(input.phone).trim();
   const paymentMethod: "RAZORPAY" | "COD" =
@@ -166,7 +185,13 @@ export async function createGuestOrder(
     }))
   );
 
-  const totals = calculateTotalsFromSubtotal(subtotalPaise, 0, paymentMethod);
+  const shippingConfig = await loadPricingShippingConfig();
+  const totals = calculateTotalsFromSubtotal(
+    subtotalPaise,
+    0,
+    paymentMethod,
+    shippingConfig
+  );
 
   if (totals.totalAmount <= 0) {
     throw new Error("Order amount must be greater than zero");
@@ -255,6 +280,11 @@ export async function createGuestOrder(
         });
       });
     });
+    // COD has no payment step, so notify the business inbox now (prepaid guest
+    // orders notify after payment verification). Fire-and-forget — must never
+    // block or fail order placement.
+    notifyAdminOrderReceived(orderRef.id).catch(() => undefined);
+    notifyCustomerOrderConfirmed(orderRef.id).catch(() => undefined);
   } else {
     await orderRef.set(orderData);
   }

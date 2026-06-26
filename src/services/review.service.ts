@@ -101,6 +101,28 @@ export const getRecentReviewsService = async (
   });
 };
 
+/** Store-wide rating summary — average (1 decimal) + total count across all
+ *  reviews. Mirrors the visibility behavior of the recent/product endpoints,
+ *  which read every doc in the collection (no approval flag exists). */
+export const getReviewsSummaryService = async (): Promise<{
+  average: number;
+  count: number;
+}> => {
+  const snap = await reviewsCollection.get();
+  const count = snap.size;
+  if (count === 0) {
+    return { average: 0, count: 0 };
+  }
+
+  const sum = snap.docs.reduce((acc, doc) => {
+    const data = doc.data() as Record<string, unknown>;
+    return acc + (Number(data.rating) || 0);
+  }, 0);
+
+  const average = Math.round((sum / count) * 10) / 10;
+  return { average, count };
+};
+
 export const updateReviewService = async (
   uid: string,
   reviewId: string,

@@ -9,7 +9,12 @@ import {
   getFirestoreSiteSettingsCollectionName,
 } from "../config/catalog";
 import { firestore } from "../config/firebase";
-import { ORDER_DISCOUNT_RATE } from "./pricing.service";
+import {
+  COD_SURCHARGE,
+  ORDER_DISCOUNT_RATE,
+  SHIPPING_FEE,
+  SHIPPING_FREE_THRESHOLD,
+} from "./pricing.service";
 
 /** Discount applied to products that predate the per-product discount field. */
 const DEFAULT_PRODUCT_DISCOUNT_PERCENT = Math.round(ORDER_DISCOUNT_RATE * 100);
@@ -225,6 +230,20 @@ type TrialPackWritePayload = {
   is_active?: boolean | number | string | null;
 };
 
+type ShippingConfigRecord = {
+  shipping_fee: number;
+  free_shipping_threshold: number;
+  cod_surcharge: number;
+  created_at?: Timestamp | Date | string | null;
+  updated_at?: Timestamp | Date | string | null;
+};
+
+type ShippingConfigWritePayload = {
+  shipping_fee?: number | string | null;
+  free_shipping_threshold?: number | string | null;
+  cod_surcharge?: number | string | null;
+};
+
 const ALLOWED_BANNER_CHIP_ICONS = new Set(["leaf", "zero", "gi", "fruit", "drop", "sparkle", "box"]);
 const POPULAR_SHOWCASE_DOC_ID = "main";
 
@@ -371,6 +390,15 @@ const DEFAULT_TRIAL_PACK: TrialPackRecord = {
   pack_label: "trial pack",
   cups_label: "10 cups of chai",
   is_active: true,
+};
+
+const SHIPPING_CONFIG_DOC_ID = "shipping";
+
+/** Pricing-engine defaults (49 / 599 / 39) are the single source of truth. */
+const DEFAULT_SHIPPING_CONFIG: ShippingConfigRecord = {
+  shipping_fee: SHIPPING_FEE,
+  free_shipping_threshold: SHIPPING_FREE_THRESHOLD,
+  cod_surcharge: COD_SURCHARGE,
 };
 
 function normalizeNullableString(value: unknown): string | null {
@@ -696,6 +724,31 @@ function mapTrialPackRecord(raw: Record<string, unknown>): TrialPackRecord {
   };
 }
 
+/** Non-negative finite number, else the fallback. Used for shipping knobs. */
+function normalizeNonNegativeNumber(value: unknown, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function mapShippingConfigRecord(raw: Record<string, unknown>): ShippingConfigRecord {
+  return {
+    shipping_fee: normalizeNonNegativeNumber(raw.shipping_fee, DEFAULT_SHIPPING_CONFIG.shipping_fee),
+    free_shipping_threshold: normalizeNonNegativeNumber(
+      raw.free_shipping_threshold,
+      DEFAULT_SHIPPING_CONFIG.free_shipping_threshold
+    ),
+    cod_surcharge: normalizeNonNegativeNumber(raw.cod_surcharge, DEFAULT_SHIPPING_CONFIG.cod_surcharge),
+    created_at:
+      raw.created_at instanceof Timestamp || raw.created_at instanceof Date || typeof raw.created_at === "string"
+        ? (raw.created_at as Timestamp | Date | string)
+        : null,
+    updated_at:
+      raw.updated_at instanceof Timestamp || raw.updated_at instanceof Date || typeof raw.updated_at === "string"
+        ? (raw.updated_at as Timestamp | Date | string)
+        : null,
+  };
+}
+
 function toFirestoreBoolean(value: unknown, fallback = true): boolean {
   if (value === undefined || value === null || value === "") {
     return fallback;
@@ -897,6 +950,45 @@ class FirestoreCatalogService {
 
     await this.siteSettingsCollection.doc(TRIAL_PACK_DOC_ID).set(trialPackData, { merge: true });
     return mapTrialPackRecord(trialPackData);
+  }
+
+  async getShippingConfig(): Promise<ShippingConfigRecord> {
+    const snapshot = await this.siteSettingsCollection.doc(SHIPPING_CONFIG_DOC_ID).get();
+    if (!snapshot.exists) {
+      return { ...DEFAULT_SHIPPING_CONFIG };
+    }
+
+    return mapShippingConfigRecord(snapshot.data() || {});
+  }
+
+  async upsertShippingConfig(
+    payload: ShippingConfigWritePayload
+  ): Promise<ShippingConfigRecord> {
+    const now = Timestamp.now();
+    const existingSnapshot = await this.siteSettingsCollection.doc(SHIPPING_CONFIG_DOC_ID).get();
+    const existing = existingSnapshot.exists
+      ? mapShippingConfigRecord(existingSnapshot.data() || {})
+      : null;
+
+    const shippingData: Record<string, unknown> = {
+      shipping_fee: normalizeNonNegativeNumber(
+        payload.shipping_fee,
+        existing?.shipping_fee ?? DEFAULT_SHIPPING_CONFIG.shipping_fee
+      ),
+      free_shipping_threshold: normalizeNonNegativeNumber(
+        payload.free_shipping_threshold,
+        existing?.free_shipping_threshold ?? DEFAULT_SHIPPING_CONFIG.free_shipping_threshold
+      ),
+      cod_surcharge: normalizeNonNegativeNumber(
+        payload.cod_surcharge,
+        existing?.cod_surcharge ?? DEFAULT_SHIPPING_CONFIG.cod_surcharge
+      ),
+      created_at: existing?.created_at || now,
+      updated_at: now,
+    };
+
+    await this.siteSettingsCollection.doc(SHIPPING_CONFIG_DOC_ID).set(shippingData, { merge: true });
+    return mapShippingConfigRecord(shippingData);
   }
 
   async getProductById(productId: number): Promise<ProductRecord | null> {

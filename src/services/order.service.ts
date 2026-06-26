@@ -11,7 +11,23 @@ import {
   calculateTotalsFromSubtotal,
 } from "./pricing.service";
 import { fetchProductsByIds } from "./product-lookup.service";
+import {
+  notifyAdminOrderReceived,
+  notifyCustomerOrderConfirmed,
+} from "./order-notifications.service";
 import { getFirestoreProductsCollectionName } from "../config/catalog";
+import firestoreCatalogService from "./catalog-firestore.service";
+
+/** Map the Firestore shipping-config doc (snake_case) onto the pricing
+ *  engine's camelCase ShippingConfig override. */
+const loadPricingShippingConfig = async () => {
+  const cfg = await firestoreCatalogService.getShippingConfig();
+  return {
+    shippingFee: cfg.shipping_fee,
+    freeShippingThreshold: cfg.free_shipping_threshold,
+    codSurcharge: cfg.cod_surcharge,
+  };
+};
 
 const ordersCollection = firestore.collection("orders");
 const usersCollection = firestore.collection("users");
@@ -140,11 +156,16 @@ class OrderService {
     // small gap in the sequence is harmless.
     const orderNumber = await generateOrderNumber();
 
+    // Live (admin-editable) shipping knobs — fetched once so both the
+    // pre-coupon and final totals charge a consistent fee.
+    const shippingConfig = await loadPricingShippingConfig();
+
     const result = await firestore.runTransaction(async (tx) => {
       const preCouponTotals = calculateTotalsFromSubtotal(
         subtotalPaise,
         0,
-        normalizedPaymentMethod
+        normalizedPaymentMethod,
+        shippingConfig
       );
       const appliedCoupon: AppliedCoupon | null = await validateCouponForAmount(
         tx,
@@ -155,7 +176,8 @@ class OrderService {
       const totals = calculateTotalsFromSubtotal(
         subtotalPaise,
         appliedCoupon?.discountAmount || 0,
-        normalizedPaymentMethod
+        normalizedPaymentMethod,
+        shippingConfig
       );
 
       // COD: reserve stock now (atomic, reads-before-writes). Prepaid orders
@@ -246,6 +268,11 @@ class OrderService {
 
     if (normalizedPaymentMethod === "COD") {
       await clearUserCart(uid);
+      // COD has no payment step, so notify the business inbox now (prepaid
+      // orders notify after payment verification). Fire-and-forget — must
+      // never block or fail order placement.
+      notifyAdminOrderReceived(result.orderId).catch(() => undefined);
+      notifyCustomerOrderConfirmed(result.orderId).catch(() => undefined);
     }
 
     return {

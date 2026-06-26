@@ -9,7 +9,10 @@ import {
   createRazorpayOrderService,
   verifyPaymentService,
 } from "../services/payment.service";
-import { notifyAdminOrderReceived } from "../services/order-notifications.service";
+import {
+  notifyAdminOrderReceived,
+  notifyCustomerOrderConfirmed,
+} from "../services/order-notifications.service";
 
 const ordersCollection = firestore.collection("orders");
 const paymentsCollection = firestore.collection("payments");
@@ -381,6 +384,11 @@ export const razorpayWebhook = async (req: Request, res: Response) => {
       notifyAdminOrderReceived(resolvedOrderId).catch((err) =>
         console.error("admin notify (webhook) failed:", err)
       );
+      // Also email the customer their confirmation + invoice. Idempotent guard
+      // (customer_confirmation_notified_at) makes this safe even when the verify
+      // path already sent it; closes the gap where a prepaid order is confirmed
+      // ONLY via webhook (user closed the tab before verify ran).
+      notifyCustomerOrderConfirmed(resolvedOrderId).catch(() => undefined);
     }
 
     console.log("Payment saved via webhook:", paymentId);

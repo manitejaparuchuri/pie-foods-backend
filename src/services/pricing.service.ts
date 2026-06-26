@@ -14,20 +14,37 @@ export const INCLUSIVE_GST_RATE = Number(process.env.INCLUSIVE_GST_RATE || 0.05)
 /**
  * Shipping rules:
  *   • Cart total (subtotal − discount) >= ₹599 → free delivery
- *   • Below threshold → flat ₹59 shipping fee
+ *   • Below threshold → flat ₹49 shipping fee
  *   • COD orders → additional ₹39 cash-handling surcharge
  *
  * All three values are env-overridable so the business can tune without a
- * code change.
+ * code change. They double as the DEFAULTS for the admin-editable shipping
+ * config stored in Firestore (site_settings/shipping) — callers can pass a
+ * live override into the calc functions below so admin edits actually move
+ * the charged total.
  */
 export const SHIPPING_FREE_THRESHOLD = Number(
   process.env.SHIPPING_FREE_THRESHOLD || 599
 );
-export const SHIPPING_FEE = Number(process.env.SHIPPING_FEE || 59);
+export const SHIPPING_FEE = Number(process.env.SHIPPING_FEE || 49);
 export const COD_SURCHARGE = Number(process.env.COD_SURCHARGE || 39);
+
+/** Admin-editable shipping knobs. Any omitted field falls back to the
+ *  constant defaults above (49 / 599 / 39). */
+export interface ShippingConfig {
+  shippingFee: number;
+  freeShippingThreshold: number;
+  codSurcharge: number;
+}
 
 const toPaise = (rupees: number): number => Math.round((Number(rupees) || 0) * 100);
 const fromPaise = (paise: number): number => Math.round((paise + Number.EPSILON)) / 100;
+
+/** Use the candidate only when it's a finite, non-negative number; else fallback. */
+const numberOr = (value: unknown, fallback: number): number => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+};
 
 export type PaymentMethodForPricing = "RAZORPAY" | "COD";
 
@@ -108,22 +125,30 @@ export const buildPricedItemsAndSubtotal = (
 export const calculateTotalsFromSubtotal = (
   subtotalPaise: number,
   couponDiscountRupees = 0,
-  paymentMethod: PaymentMethodForPricing = "RAZORPAY"
+  paymentMethod: PaymentMethodForPricing = "RAZORPAY",
+  shippingConfig?: Partial<ShippingConfig> | null
 ): PricingTotals => {
   const subtotal = Math.max(0, subtotalPaise);
   const couponDiscountPaise = clampPaise(toPaise(couponDiscountRupees), 0, subtotal);
   const taxableSubtotalPaise = subtotal - couponDiscountPaise;
   const taxableSubtotalRupees = fromPaise(taxableSubtotalPaise);
 
+  // Live (admin-editable) shipping knobs, falling back to the constant
+  // defaults whenever a field is absent/invalid so the charged total is
+  // always well-defined.
+  const freeThreshold = numberOr(shippingConfig?.freeShippingThreshold, SHIPPING_FREE_THRESHOLD);
+  const shippingFee = numberOr(shippingConfig?.shippingFee, SHIPPING_FEE);
+  const codSurcharge = numberOr(shippingConfig?.codSurcharge, COD_SURCHARGE);
+
   // Shipping rules: free at/above the threshold, flat fee below.
   const shippingFeePaise =
-    taxableSubtotalRupees >= SHIPPING_FREE_THRESHOLD
+    taxableSubtotalRupees >= freeThreshold
       ? 0
-      : toPaise(SHIPPING_FEE);
+      : toPaise(shippingFee);
 
   // COD surcharge layered on top of shipping.
   const codSurchargePaise =
-    paymentMethod === "COD" ? toPaise(COD_SURCHARGE) : 0;
+    paymentMethod === "COD" ? toPaise(codSurcharge) : 0;
 
   // The customer pays exactly (goods inclusive-of-GST) + shipping + COD.
   // We round UP to whole rupees so Razorpay never shows decimals — anything
@@ -157,13 +182,15 @@ export const calculateTotalsFromSubtotal = (
 export const calculateOrderPricing = (
   items: PricingInputItem[],
   couponDiscountRupees = 0,
-  paymentMethod: PaymentMethodForPricing = "RAZORPAY"
+  paymentMethod: PaymentMethodForPricing = "RAZORPAY",
+  shippingConfig?: Partial<ShippingConfig> | null
 ): OrderPricingResult => {
   const { pricedItems, subtotalPaise } = buildPricedItemsAndSubtotal(items);
   const totals = calculateTotalsFromSubtotal(
     subtotalPaise,
     couponDiscountRupees,
-    paymentMethod
+    paymentMethod,
+    shippingConfig
   );
 
   return {

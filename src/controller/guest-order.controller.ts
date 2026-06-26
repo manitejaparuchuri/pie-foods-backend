@@ -58,13 +58,18 @@ export const createGuestOrderController = async (
       return res.status(400).json({ message: validation.error });
     }
 
-    // Per-email rate limit — circuit breaker against abuse
-    const limit = await isGuestEmailRateLimited(String(req.body.email).trim().toLowerCase());
-    if (limit.limited) {
-      return res.status(429).json({
-        message:
-          "Too many recent orders for this email. Please try again tomorrow, or sign in to continue.",
-      });
+    // Per-email rate limit — circuit breaker against abuse. Email is optional;
+    // when it's absent we skip this check (the per-IP limiter on the route still
+    // applies) so emailless guests don't all share one "" rate-limit bucket.
+    const rateLimitEmail = String(req.body.email || "").trim().toLowerCase();
+    if (rateLimitEmail) {
+      const limit = await isGuestEmailRateLimited(rateLimitEmail);
+      if (limit.limited) {
+        return res.status(429).json({
+          message:
+            "Too many recent orders for this email. Please try again tomorrow, or sign in to continue.",
+        });
+      }
     }
 
     const result = await createGuestOrder(req.body as GuestOrderInput);

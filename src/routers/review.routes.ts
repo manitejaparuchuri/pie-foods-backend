@@ -3,6 +3,7 @@ import {
   addReview,
   getProductReviews,
   getRecentReviews,
+  getReviewsSummary,
   updateReview,
   deleteReview
 } from "../controller/review.controller";
@@ -15,6 +16,9 @@ router.post("/", verifyToken, addReview);
 
 // Newest reviews across all products (home page). Literal path, keep before params.
 router.get("/recent", getRecentReviews);
+
+// Store-wide rating summary. Literal path, keep before params.
+router.get("/summary", getReviewsSummary);
 
 // Get reviews for a product
 router.get("/product/:productId", getProductReviews);

@@ -354,6 +354,79 @@ export async function changeFirebaseAdminPassword(
   }
 }
 
+/**
+ * Change a signed-in customer's password. Verifies the current password by
+ * re-authenticating against Firebase, then updates it. Throws AuthFlowError
+ * with customer-facing messages:
+ *   - 401 INVALID_CURRENT_PASSWORD when the current password is wrong
+ *   - 400 PASSWORD_NOT_AVAILABLE when the account has no password (Google sign-in)
+ *   - 400 WEAK_PASSWORD when the new password is shorter than 6 chars
+ */
+export async function changeUserPassword(
+  emailInput: string,
+  uid: string,
+  currentPassword: string,
+  newPassword: string
+): Promise<void> {
+  const email = String(emailInput || "").trim().toLowerCase();
+  if (!email || !uid) {
+    throw new AuthFlowError("Your session is missing email or uid", 400, "MISSING_IDENTITY");
+  }
+
+  if (String(newPassword || "").length < 6) {
+    throw new AuthFlowError("New password must be at least 6 characters", 400, "WEAK_PASSWORD");
+  }
+
+  const apiKey = getFirebaseWebApiKey();
+
+  // Verify the current password by re-authenticating against Firebase.
+  try {
+    await signInWithFirebasePassword(email, currentPassword, apiKey);
+  } catch (error) {
+    if (isAuthFlowError(error) && (error.statusCode === 400 || error.statusCode === 401)) {
+      // Re-auth failed. Distinguish "no password on this account" (e.g. the
+      // user signed up with Google) from a plain wrong-password so the UI can
+      // explain why changing the password isn't possible.
+      const hasPasswordProvider = await userHasPasswordProvider(uid);
+      if (!hasPasswordProvider) {
+        throw new AuthFlowError(
+          "Password change isn't available for accounts created with Google sign-in",
+          400,
+          "PASSWORD_NOT_AVAILABLE"
+        );
+      }
+      throw new AuthFlowError("Current password is incorrect", 401, "INVALID_CURRENT_PASSWORD");
+    }
+    throw error;
+  }
+
+  try {
+    await auth.updateUser(uid, { password: newPassword });
+  } catch (error: any) {
+    const code = String(error?.code || "");
+    if (code === "auth/invalid-password") {
+      throw new AuthFlowError("New password must be at least 6 characters", 400, "WEAK_PASSWORD");
+    }
+    if (code === "auth/user-not-found") {
+      throw new AuthFlowError("Account was not found", 404, "USER_NOT_FOUND");
+    }
+    throw error;
+  }
+}
+
+async function userHasPasswordProvider(uid: string): Promise<boolean> {
+  try {
+    const firebaseUser = await auth.getUser(uid);
+    return firebaseUser.providerData.some(
+      (provider) => provider.providerId === "password"
+    );
+  } catch {
+    // If we can't tell, assume a password exists so we fall back to the safer
+    // "current password is incorrect" message rather than a misleading one.
+    return true;
+  }
+}
+
 export async function upsertFirestoreUserFromGoogleLogin(params: {
   email: string;
   name: string;

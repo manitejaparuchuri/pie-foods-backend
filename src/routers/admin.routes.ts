@@ -21,6 +21,7 @@ import {
   deleteBanner,
   updatePopularProductsShowcase,
   updateTrialPack,
+  updateShippingConfig,
   createCoupon,
   updateCoupon,
   deleteCoupon,
@@ -28,6 +29,11 @@ import {
   getCouponById,
   uploadAdminImage,
 } from "../controller/admin.controller";
+import {
+  listAdminNotifications,
+  markAdminNotificationRead,
+  markAllAdminNotificationsRead,
+} from "../controller/admin-notifications.controller";
 import { verifyToken } from "../middlewares/auth";
 import { requireAdmin } from "../middlewares/admin";
 import upload from "../middlewares/upload";
@@ -85,6 +91,8 @@ router.put("/popular-products", updatePopularProductsShowcase);
 
 router.put("/trial-pack", updateTrialPack);
 
+router.put("/shipping-config", updateShippingConfig);
+
 import {
   getAdminOrders,
   shipOrder,
@@ -99,6 +107,12 @@ router.get("/coupons/:id", getCouponById);
 router.post("/coupons", createCoupon);
 router.put("/coupons/:id", updateCoupon);
 router.delete("/coupons/:id", deleteCoupon);
+
+/* ─── In-panel notifications feed ─── */
+// Declare /read-all before /:id/read so the param doesn't capture "read-all".
+router.get("/notifications", listAdminNotifications);
+router.put("/notifications/read-all", markAllAdminNotificationsRead);
+router.put("/notifications/:id/read", markAdminNotificationRead);
 
 /* ─── Order management + Delhivery shipping ─── */
 router.get("/orders", getAdminOrders);

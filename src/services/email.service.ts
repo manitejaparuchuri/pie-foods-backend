@@ -99,7 +99,7 @@ async function sendViaSmtp(message: EmailMessage): Promise<boolean> {
   });
 
   await transporter.sendMail({
-    from: `"${getEnv("BREVO_FROM_NAME", "PIE Foods")}" <${user}>`,
+    from: `"${getEnv("BREVO_FROM_NAME", "PIE Foods")}" <${getEnv("BREVO_FROM_EMAIL") || user}>`,
     to: message.to,
     replyTo: message.replyTo,
     subject: message.subject,

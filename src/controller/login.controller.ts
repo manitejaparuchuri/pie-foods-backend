@@ -2,12 +2,17 @@ import { Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { OAuth2Client } from "google-auth-library";
 import {
+  changeUserPassword,
   getUserProfile,
   isAuthFlowError,
   loginWithFirebaseAuth,
   updateUserProfile,
   upsertFirestoreUserFromGoogleLogin,
 } from "../services/firebase-auth.service";
+import {
+  requestPasswordReset,
+  resetPasswordWithToken,
+} from "../services/password-reset.service";
 import { AuthRequest } from "../middlewares/auth";
 
 const googleClient = new OAuth2Client();
@@ -133,5 +138,73 @@ export const googleLogin = async (req: Request, res: Response) => {
   } catch (error: any) {
     console.error("GOOGLE LOGIN ERROR:", error?.message || error);
     return res.status(401).json({ message: "Google authentication failed" });
+  }
+};
+
+// Always responds with the same generic message so the endpoint never reveals
+// whether an account exists for the submitted email. The actual lookup + email
+// send happens inside the service and is silently skipped when there's no
+// password-based account.
+const FORGOT_PASSWORD_MESSAGE =
+  "If an account exists for that email, a reset link has been sent.";
+
+export const forgotPassword = async (req: Request, res: Response) => {
+  const email = String(req.body?.email || "").trim().toLowerCase();
+
+  try {
+    await requestPasswordReset(email);
+  } catch (error: any) {
+    // Never surface internal failures (or whether the email exists) to the
+    // caller — just log and return the generic success response.
+    console.error("FORGOT PASSWORD ERROR:", error?.message || error);
+  }
+
+  return res.json({ message: FORGOT_PASSWORD_MESSAGE });
+};
+
+export const resetPassword = async (req: Request, res: Response) => {
+  const email = String(req.body?.email || "").trim().toLowerCase();
+  const token = String(req.body?.token || "");
+  const password = String(req.body?.password || "");
+
+  try {
+    const result = await resetPasswordWithToken(email, token, password);
+    if (!result.ok) {
+      return res.status(result.status).json({ error: result.error });
+    }
+    return res.json({ message: "Your password has been reset. You can now sign in." });
+  } catch (error: any) {
+    console.error("RESET PASSWORD ERROR:", error?.message || error);
+    return res.status(500).json({ error: "Unable to reset your password right now." });
+  }
+};
+
+export const changePassword = async (req: AuthRequest, res: Response) => {
+  const uid = req.user?.uid;
+  const email = req.user?.email;
+  if (!uid || !email) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const currentPassword = String(req.body?.currentPassword || "");
+  const newPassword = String(req.body?.newPassword || "");
+
+  try {
+    await changeUserPassword(email, uid, currentPassword, newPassword);
+    return res.json({ message: "Password updated." });
+  } catch (error: any) {
+    if (isAuthFlowError(error)) {
+      const message =
+        error.errorCode === "INVALID_CURRENT_PASSWORD"
+          ? "Your current password is incorrect."
+          : error.errorCode === "PASSWORD_NOT_AVAILABLE"
+          ? "Password change isn't available for accounts created with Google sign-in."
+          : error.errorCode === "WEAK_PASSWORD"
+          ? "New password must be at least 6 characters."
+          : error.message;
+      return res.status(error.statusCode).json({ error: message });
+    }
+    console.error("CHANGE PASSWORD ERROR:", error?.message || error);
+    return res.status(500).json({ error: "Unable to update your password right now." });
   }
 };

@@ -21,6 +21,7 @@ import { generateInvoicePdf, InvoiceData } from "./invoice-pdf.service";
 
 const ordersCollection = firestore.collection("orders");
 const usersCollection = firestore.collection("users");
+const adminNotificationsCollection = firestore.collection("admin_notifications");
 
 interface RawOrderItem {
   product_id?: number;
@@ -136,6 +137,30 @@ export async function notifyAdminOrderReceived(orderId: string): Promise<void> {
       address = addressRaw;
     }
 
+    // Atomically claim this order's notification by creating an admin_notifications
+    // doc keyed by orderId. create() fails with ALREADY_EXISTS if another path
+    // (e.g. the Razorpay verify AND webhook firing near-simultaneously) already
+    // claimed it — so both the in-panel row AND the admin email go out exactly once.
+    try {
+      await adminNotificationsCollection.doc(orderId).create({
+        type: "NEW_ORDER",
+        order_id: orderId,
+        order_number: order.order_number ? String(order.order_number) : "",
+        total_amount: Number(order.total_amount) || 0,
+        customer_email: customerEmail || "",
+        customer_name: customerName || "",
+        payment_method: String(order.payment_method || "RAZORPAY"),
+        created_at: Timestamp.now(),
+        read: false,
+      });
+    } catch (err: any) {
+      const code = err?.code;
+      if (code === 6 || code === "already-exists" || String(err?.message || "").includes("ALREADY_EXISTS")) {
+        return; // another path already notified for this order — don't re-email
+      }
+      throw err;
+    }
+
     const orderDateTs = order.order_date as Timestamp | undefined;
 
     await sendOrderReceivedEmailToAdmin({
@@ -160,7 +185,8 @@ export async function notifyAdminOrderReceived(orderId: string): Promise<void> {
         : undefined,
     });
 
-    // Mark as notified so duplicate webhooks don't re-spam the admin
+    // Mark the order as notified so the fast-path guard above short-circuits any
+    // later re-entry (the create() claim above is the real concurrency gate).
     await ordersCollection.doc(orderId).update({
       admin_notified_at: Timestamp.now(),
     });

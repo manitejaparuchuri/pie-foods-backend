@@ -20,11 +20,14 @@ const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 1
 
 export const getStorefrontSettings = async (_req: Request, res: Response) => {
   try {
-    const trialPack = await withCache(
-      "catalog:storefront:trial-pack",
-      FIVE_MIN,
-      () => firestoreCatalogService.getTrialPack()
-    );
+    const [trialPack, shippingConfig] = await Promise.all([
+      withCache("catalog:storefront:trial-pack", FIVE_MIN, () =>
+        firestoreCatalogService.getTrialPack()
+      ),
+      withCache("catalog:storefront:shipping", FIVE_MIN, () =>
+        firestoreCatalogService.getShippingConfig()
+      ),
+    ]);
 
     res.set("Cache-Control", PUBLIC_CACHE_HEADER);
     return res.json({
@@ -33,6 +36,11 @@ export const getStorefrontSettings = async (_req: Request, res: Response) => {
       // not added on top. The frontend uses this only for invoice-style display.
       gst_percent: round2(INCLUSIVE_GST_RATE * 100),
       gst_inclusive: true,
+      // Shipping knobs the storefront uses to preview delivery charges. The
+      // backend remains the source of truth for the actually-charged total.
+      shipping_fee: Number(shippingConfig.shipping_fee),
+      free_shipping_threshold: Number(shippingConfig.free_shipping_threshold),
+      cod_surcharge: Number(shippingConfig.cod_surcharge),
       trial_pack: normalizeTrialPack(trialPack),
     });
   } catch (error) {

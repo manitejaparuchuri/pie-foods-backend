@@ -4,6 +4,7 @@ import {
   addReviewService,
   getProductReviewsService,
   getRecentReviewsService,
+  getReviewsSummaryService,
   updateReviewService,
   deleteReviewService,
 } from "../services/review.service";
@@ -64,6 +65,15 @@ export const getRecentReviews = async (req: Request, res: Response) => {
     res.json(reviews);
   } catch (error) {
     res.status(500).json({ message: "Failed to fetch reviews" });
+  }
+};
+
+export const getReviewsSummary = async (_req: Request, res: Response) => {
+  try {
+    const summary = await getReviewsSummaryService();
+    res.json(summary);
+  } catch (error) {
+    res.status(500).json({ message: "Failed to fetch reviews summary" });
   }
 };
 

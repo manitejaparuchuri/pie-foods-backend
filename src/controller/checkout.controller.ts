@@ -12,6 +12,17 @@ import {
   calculateTotalsFromSubtotal,
 } from "../services/pricing.service";
 import { fetchProductsByIds } from "../services/product-lookup.service";
+import firestoreCatalogService from "../services/catalog-firestore.service";
+
+/** Map the Firestore shipping-config doc onto the pricing engine override. */
+const loadPricingShippingConfig = async () => {
+  const cfg = await firestoreCatalogService.getShippingConfig();
+  return {
+    shippingFee: cfg.shipping_fee,
+    freeShippingThreshold: cfg.free_shipping_threshold,
+    codSurcharge: cfg.cod_surcharge,
+  };
+};
 
 const ordersCollection = firestore.collection("orders");
 const usersCollection = firestore.collection("users");
@@ -80,8 +91,17 @@ export const checkout = async (req: AuthRequest, res: Response) => {
       }))
     );
 
+    // Live (admin-editable) shipping knobs — fetched once before the txn so
+    // both the pre-coupon and final totals charge a consistent fee.
+    const shippingConfig = await loadPricingShippingConfig();
+
     const result = await firestore.runTransaction(async (tx) => {
-      const preCouponTotals = calculateTotalsFromSubtotal(subtotalPaise, 0);
+      const preCouponTotals = calculateTotalsFromSubtotal(
+        subtotalPaise,
+        0,
+        "RAZORPAY",
+        shippingConfig
+      );
       const appliedCoupon = await validateCouponForAmount(
         tx,
         uid,
@@ -90,7 +110,9 @@ export const checkout = async (req: AuthRequest, res: Response) => {
       );
       const totals = calculateTotalsFromSubtotal(
         subtotalPaise,
-        appliedCoupon?.discountAmount || 0
+        appliedCoupon?.discountAmount || 0,
+        "RAZORPAY",
+        shippingConfig
       );
 
       const orderRef = ordersCollection.doc();
