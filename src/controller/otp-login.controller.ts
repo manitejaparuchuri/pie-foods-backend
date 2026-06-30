@@ -138,6 +138,9 @@ export const verifyOtpController = async (req: Request, res: Response) => {
         address: baseProfile.address || null,
       },
       linkedOrders: linkedCount,
+      // True only when this OTP verify just created the account — the storefront
+      // uses it to fire the "welcome / 10% off" celebration popup once.
+      isNewUser,
     });
   } catch (error: any) {
     if (error instanceof OtpInvalidError) {

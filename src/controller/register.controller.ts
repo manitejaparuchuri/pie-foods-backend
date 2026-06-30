@@ -35,6 +35,9 @@ export const register = async (req: Request, res: Response) => {
       message: "Registration successful",
       user,
       token,
+      // Registration always mints a brand-new account — lets the storefront
+      // fire the "welcome / 10% off" celebration popup on first signup.
+      isNewUser: true,
     });
   } catch (err: any) {
     if (isAuthFlowError(err)) {
