@@ -15,6 +15,7 @@ import { AuthRequest } from "../middlewares/auth";
 import firestoreCatalogService from "../services/catalog-firestore.service";
 import { changeFirebaseAdminPassword, isAuthFlowError, loginFirebaseAdmin } from "../services/firebase-auth.service";
 import { bumpCacheVersion } from "../config/cache";
+import { INCLUSIVE_GST_RATE, ORDER_DISCOUNT_RATE } from "../services/pricing.service";
 
 const invalidateCatalog = () => bumpCacheVersion("catalog");
 
@@ -1036,6 +1037,64 @@ const normalizeFirestoreShippingConfigForAdmin = (config: any) => ({
   cod_surcharge: Number(config.cod_surcharge) || 0,
   updated_at: toIsoString(config.updated_at),
 });
+
+/** GET the current store settings for the admin Settings page (always fresh —
+ *  the /api/admin/* routes are no-store). Editable shipping knobs come from
+ *  Firestore; GST % + order-discount % are server-config values shown read-only. */
+const normalizeAnnouncementForAdmin = (a: any) => ({
+  enabled: a.enabled !== false,
+  message: String(a.message || ""),
+  coupon_code: String(a.coupon_code || "").toUpperCase(),
+  cta_label: String(a.cta_label || ""),
+  cta_link: String(a.cta_link || ""),
+  updated_at: toIsoString(a.updated_at),
+});
+
+export const getShippingConfig = async (_req: Request, res: Response) => {
+  try {
+    const [config, announcement] = await Promise.all([
+      firestoreCatalogService.getShippingConfig(),
+      firestoreCatalogService.getAnnouncement(),
+    ]);
+    const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
+    return res.json({
+      shipping_fee: Number(config.shipping_fee) || 0,
+      free_shipping_threshold: Number(config.free_shipping_threshold) || 0,
+      cod_surcharge: Number(config.cod_surcharge) || 0,
+      // Read-only (set via server env): GST is inclusive/display-only, and the
+      // global order-discount is only a fallback for products without their own.
+      gst_percent: round2(INCLUSIVE_GST_RATE * 100),
+      order_discount_percent: round2(ORDER_DISCOUNT_RATE * 100),
+      updated_at: toIsoString(config.updated_at),
+      // Admin-editable announcement bar / welcome offer.
+      announcement: normalizeAnnouncementForAdmin(announcement),
+    });
+  } catch (error) {
+    console.error("GET SHIPPING CONFIG ERROR:", error);
+    return res.status(500).json({ message: "Unable to load store settings" });
+  }
+};
+
+export const updateAnnouncement = async (req: Request, res: Response) => {
+  try {
+    const body = req.body || {};
+    const announcement = await firestoreCatalogService.upsertAnnouncement({
+      enabled: body.enabled,
+      message: body.message,
+      coupon_code: body.coupon_code,
+      cta_label: body.cta_label,
+      cta_link: body.cta_link,
+    });
+    invalidateCatalog();
+    return res.json({
+      message: "Announcement updated",
+      announcement: normalizeAnnouncementForAdmin(announcement),
+    });
+  } catch (error) {
+    console.error("UPDATE ANNOUNCEMENT ERROR:", error);
+    return res.status(500).json({ message: "Unable to update announcement" });
+  }
+};
 
 export const updateShippingConfig = async (req: Request, res: Response) => {
   // Each field is optional — an omitted field keeps the existing value (or the

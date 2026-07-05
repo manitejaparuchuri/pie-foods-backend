@@ -23,6 +23,7 @@ import bannerRoutes from "./routers/banner.routes";
 import popularProductsRoutes from "./routers/popular-products.routes";
 import storefrontRoutes from "./routers/storefront.routes";
 import cronRoutes from "./routers/cron.routes";
+import leadRoutes from "./routers/abandoned-checkout.routes";
 
 const app = express();
 app.disable("x-powered-by");
@@ -160,6 +161,7 @@ app.use("/api/combos", comboRoutes);
 app.use("/api/banners", bannerRoutes);
 app.use("/api/popular-products", popularProductsRoutes);
 app.use("/api/storefront", storefrontRoutes);
+app.use("/api/leads", leadRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/cron", cronRoutes);
 

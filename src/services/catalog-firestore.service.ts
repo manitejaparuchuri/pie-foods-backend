@@ -238,6 +238,25 @@ type ShippingConfigRecord = {
   updated_at?: Timestamp | Date | string | null;
 };
 
+/** Admin-editable top announcement bar / welcome-offer config. */
+type AnnouncementRecord = {
+  enabled: boolean;
+  message: string;
+  coupon_code: string;
+  cta_label: string;
+  cta_link: string;
+  created_at?: Timestamp | Date | string | null;
+  updated_at?: Timestamp | Date | string | null;
+};
+
+type AnnouncementWritePayload = {
+  enabled?: boolean | number | string | null;
+  message?: string | null;
+  coupon_code?: string | null;
+  cta_label?: string | null;
+  cta_link?: string | null;
+};
+
 type ShippingConfigWritePayload = {
   shipping_fee?: number | string | null;
   free_shipping_threshold?: number | string | null;
@@ -399,6 +418,16 @@ const DEFAULT_SHIPPING_CONFIG: ShippingConfigRecord = {
   shipping_fee: SHIPPING_FEE,
   free_shipping_threshold: SHIPPING_FREE_THRESHOLD,
   cod_surcharge: COD_SURCHARGE,
+};
+
+const ANNOUNCEMENT_DOC_ID = "announcement";
+
+const DEFAULT_ANNOUNCEMENT: AnnouncementRecord = {
+  enabled: true,
+  message: "New here? Get 10% OFF your first order",
+  coupon_code: "WELCOME10",
+  cta_label: "Sign up",
+  cta_link: "/login?mode=signup",
 };
 
 function normalizeNullableString(value: unknown): string | null {
@@ -749,6 +778,28 @@ function mapShippingConfigRecord(raw: Record<string, unknown>): ShippingConfigRe
   };
 }
 
+function mapAnnouncementRecord(raw: Record<string, unknown>): AnnouncementRecord {
+  const str = (v: unknown, fallback: string) => {
+    const s = String(v ?? "").trim();
+    return s || fallback;
+  };
+  return {
+    enabled: toFirestoreBoolean(raw.enabled, DEFAULT_ANNOUNCEMENT.enabled),
+    message: str(raw.message, DEFAULT_ANNOUNCEMENT.message),
+    coupon_code: str(raw.coupon_code, DEFAULT_ANNOUNCEMENT.coupon_code).toUpperCase(),
+    cta_label: str(raw.cta_label, DEFAULT_ANNOUNCEMENT.cta_label),
+    cta_link: str(raw.cta_link, DEFAULT_ANNOUNCEMENT.cta_link),
+    created_at:
+      raw.created_at instanceof Timestamp || raw.created_at instanceof Date || typeof raw.created_at === "string"
+        ? (raw.created_at as Timestamp | Date | string)
+        : null,
+    updated_at:
+      raw.updated_at instanceof Timestamp || raw.updated_at instanceof Date || typeof raw.updated_at === "string"
+        ? (raw.updated_at as Timestamp | Date | string)
+        : null,
+  };
+}
+
 function toFirestoreBoolean(value: unknown, fallback = true): boolean {
   if (value === undefined || value === null || value === "") {
     return fallback;
@@ -989,6 +1040,40 @@ class FirestoreCatalogService {
 
     await this.siteSettingsCollection.doc(SHIPPING_CONFIG_DOC_ID).set(shippingData, { merge: true });
     return mapShippingConfigRecord(shippingData);
+  }
+
+  async getAnnouncement(): Promise<AnnouncementRecord> {
+    const snapshot = await this.siteSettingsCollection.doc(ANNOUNCEMENT_DOC_ID).get();
+    if (!snapshot.exists) {
+      return { ...DEFAULT_ANNOUNCEMENT };
+    }
+    return mapAnnouncementRecord(snapshot.data() || {});
+  }
+
+  async upsertAnnouncement(payload: AnnouncementWritePayload): Promise<AnnouncementRecord> {
+    const now = Timestamp.now();
+    const existingSnapshot = await this.siteSettingsCollection.doc(ANNOUNCEMENT_DOC_ID).get();
+    const existing = existingSnapshot.exists
+      ? mapAnnouncementRecord(existingSnapshot.data() || {})
+      : null;
+
+    const pick = (value: unknown, fallback: string, max = 200) => {
+      const s = String(value ?? "").trim();
+      return (s || fallback).slice(0, max);
+    };
+
+    const announcementData: Record<string, unknown> = {
+      enabled: toFirestoreBoolean(payload.enabled, existing?.enabled ?? DEFAULT_ANNOUNCEMENT.enabled),
+      message: pick(payload.message, existing?.message ?? DEFAULT_ANNOUNCEMENT.message),
+      coupon_code: pick(payload.coupon_code, existing?.coupon_code ?? DEFAULT_ANNOUNCEMENT.coupon_code, 40).toUpperCase(),
+      cta_label: pick(payload.cta_label, existing?.cta_label ?? DEFAULT_ANNOUNCEMENT.cta_label, 40),
+      cta_link: pick(payload.cta_link, existing?.cta_link ?? DEFAULT_ANNOUNCEMENT.cta_link, 200),
+      created_at: existing?.created_at || now,
+      updated_at: now,
+    };
+
+    await this.siteSettingsCollection.doc(ANNOUNCEMENT_DOC_ID).set(announcementData, { merge: true });
+    return mapAnnouncementRecord(announcementData);
   }
 
   async getProductById(productId: number): Promise<ProductRecord | null> {

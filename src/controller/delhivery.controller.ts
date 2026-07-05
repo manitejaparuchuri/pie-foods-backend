@@ -84,28 +84,50 @@ export const getAdminOrders = async (_req: Request, res: Response) => {
       const user = userMap.get(uid);
       const addr = addressMap.get(`${uid}::${sid}`);
 
+      // Guest orders store the customer + address directly on the order doc;
+      // logged-in orders reference the users collection + an address doc. Prefer
+      // whatever the ORDER itself carries, then fall back to the user/address
+      // records, so BOTH kinds always show full details in the admin panel.
+      const orderShip =
+        data.shipping_address && typeof data.shipping_address === "object"
+          ? (data.shipping_address as Record<string, unknown>)
+          : null;
+      const customerName =
+        String(data.customer_name || "") ||
+        user?.name ||
+        (orderShip?.name ? String(orderShip.name) : "") ||
+        (addr?.name ? String(addr.name) : "");
+      const customerEmail = String(data.customer_email || "") || user?.email || "";
+      const customerPhone =
+        String(data.customer_phone || "") ||
+        (orderShip?.phone ? String(orderShip.phone) : "") ||
+        (addr?.phone ? String(addr.phone) : "");
+      const shipSource = orderShip || addr;
+
       return {
         orderId: doc.id,
         orderNumber: data.order_number ? String(data.order_number) : null,
         status: String(data.status || ""),
         paymentMethod: String(data.payment_method || "RAZORPAY"),
+        isGuest: Boolean(data.is_guest),
         totalAmount: Number(data.total_amount) || 0,
         subtotalAmount: Number(data.subtotal_amount) || 0,
         couponCode: data.coupon_code ? String(data.coupon_code) : null,
         couponDiscountAmount: Number(data.coupon_discount_amount) || 0,
         userId: uid,
-        customerEmail: user?.email || null,
-        customerName: user?.name || (addr?.name ? String(addr.name) : null),
+        customerEmail: customerEmail || null,
+        customerName: customerName || null,
+        customerPhone: customerPhone || null,
         shippingId: sid,
-        shippingAddress: addr
+        shippingAddress: shipSource
           ? {
-              name: String(addr.name || user?.name || ""),
-              phone: String(addr.phone || ""),
-              address: String(addr.address || ""),
-              city: String(addr.city || ""),
-              state: String(addr.state || ""),
-              postalCode: String(addr.postal_code || ""),
-              country: String(addr.country || "India"),
+              name: String(shipSource.name || customerName || ""),
+              phone: String(shipSource.phone || customerPhone || ""),
+              address: String(shipSource.address || ""),
+              city: String(shipSource.city || ""),
+              state: String(shipSource.state || ""),
+              postalCode: String(shipSource.postal_code || ""),
+              country: String(shipSource.country || "India"),
             }
           : null,
         trackingWaybill: data.tracking_waybill

@@ -21,7 +21,9 @@ import {
   deleteBanner,
   updatePopularProductsShowcase,
   updateTrialPack,
+  getShippingConfig,
   updateShippingConfig,
+  updateAnnouncement,
   createCoupon,
   updateCoupon,
   deleteCoupon,
@@ -91,7 +93,9 @@ router.put("/popular-products", updatePopularProductsShowcase);
 
 router.put("/trial-pack", updateTrialPack);
 
+router.get("/shipping-config", getShippingConfig);
 router.put("/shipping-config", updateShippingConfig);
+router.put("/announcement", updateAnnouncement);
 
 import {
   getAdminOrders,
@@ -101,6 +105,7 @@ import {
   testDelhiveryConnection,
   resetOrderShipping,
 } from "../controller/delhivery.controller";
+import { getAbandonedCheckouts } from "../controller/abandoned-checkout.controller";
 
 router.get("/coupons", getCoupons);
 router.get("/coupons/:id", getCouponById);
@@ -121,5 +126,8 @@ router.put("/orders/:id/status", updateOrderStatus);
 router.get("/orders/:id/label", getOrderLabel);
 router.post("/orders/:id/reset-shipping", resetOrderShipping);
 router.get("/delhivery/test", testDelhiveryConnection);
+
+/* ─── Abandoned checkouts (shoppers who entered details but never ordered) ─── */
+router.get("/abandoned-checkouts", getAbandonedCheckouts);
 
 export default router;

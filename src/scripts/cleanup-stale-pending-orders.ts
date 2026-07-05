@@ -1,20 +1,23 @@
 /**
- * Cron-friendly cleanup: deletes orders that have been stuck in
- * PENDING_PAYMENT for longer than the configured threshold.
+ * Cron-friendly cleanup: RE-LABELS orders stuck in PENDING_PAYMENT for longer
+ * than the configured threshold to status ABANDONED_PAYMENT.
  *
  * These are orders where the customer hit "Proceed to Payment" but never
  * completed payment (closed the tab, payment failed silently, abandoned cart).
- * They contribute zero revenue, accumulate in Firestore, and clutter admin
- * views. After 24 hours they're effectively dead.
+ * The business WANTS to keep these leads — full name / phone / email / address /
+ * cart are captured on the doc — so they can review and follow up. We therefore
+ * mark them ABANDONED_PAYMENT (which the admin panel filters out of "live"
+ * orders and into an Abandoned view) instead of DELETING them. Nothing is lost.
  *
- * Also deletes expired OTP codes from the otp_codes collection.
+ * Also deletes expired OTP codes from the otp_codes collection (those are
+ * throwaway one-time codes, safe to purge).
  *
  * Usage:
  *   npx ts-node src/scripts/cleanup-stale-pending-orders.ts            (dry run)
- *   npx ts-node src/scripts/cleanup-stale-pending-orders.ts --apply    (delete)
+ *   npx ts-node src/scripts/cleanup-stale-pending-orders.ts --apply    (relabel)
  *
  * Optional flags:
- *   --hours=24       (default: how old before considered stale)
+ *   --hours=24       (default: how old before considered stale/abandoned)
  *
  * Recommended cadence: run daily via cron, GitHub Action, or Railway cron.
  */
@@ -27,10 +30,13 @@ const hoursArg = process.argv.find((a) => a.startsWith("--hours="));
 const STALE_HOURS = hoursArg ? Number(hoursArg.split("=")[1]) || 24 : 24;
 const BATCH_SIZE = 400;
 
+/** Status we move stale unpaid orders to (retained, not deleted). */
+export const ABANDONED_STATUS = "ABANDONED_PAYMENT";
+
 const ordersCollection = firestore.collection("orders");
 const otpCollection = firestore.collection("otp_codes");
 
-async function cleanupStaleOrders(): Promise<number> {
+async function relabelStaleOrders(): Promise<number> {
   const cutoffMillis = Date.now() - STALE_HOURS * 60 * 60 * 1000;
 
   // Single-field equality on status (no composite index needed); filter date in memory.
@@ -50,7 +56,7 @@ async function cleanupStaleOrders(): Promise<number> {
   }
 
   if (!APPLY) {
-    console.log(`  [orders] would delete ${staleDocs.length} stale PENDING_PAYMENT order(s)`);
+    console.log(`  [orders] would mark ${staleDocs.length} stale order(s) as ${ABANDONED_STATUS} (retained)`);
     staleDocs.slice(0, 5).forEach((doc) => {
       const data = doc.data();
       console.log(`    • ${doc.id} (email: ${data.customer_email || data.user_id || "?"})`);
@@ -59,25 +65,29 @@ async function cleanupStaleOrders(): Promise<number> {
     return staleDocs.length;
   }
 
-  let deleted = 0;
+  let updated = 0;
   let batch = firestore.batch();
   let pending = 0;
   for (const doc of staleDocs) {
-    batch.delete(doc.ref);
+    batch.update(doc.ref, {
+      status: ABANDONED_STATUS,
+      abandoned_at: Timestamp.now(),
+      updated_at: Timestamp.now(),
+    });
     pending++;
     if (pending >= BATCH_SIZE) {
       await batch.commit();
-      deleted += pending;
+      updated += pending;
       batch = firestore.batch();
       pending = 0;
     }
   }
   if (pending > 0) {
     await batch.commit();
-    deleted += pending;
+    updated += pending;
   }
-  console.log(`  [orders] deleted ${deleted} stale PENDING_PAYMENT order(s) ✓`);
-  return deleted;
+  console.log(`  [orders] marked ${updated} order(s) as ${ABANDONED_STATUS} (retained for follow-up) ✓`);
+  return updated;
 }
 
 async function cleanupExpiredOtps(): Promise<number> {
@@ -117,19 +127,20 @@ async function cleanupExpiredOtps(): Promise<number> {
 
 async function main(): Promise<void> {
   console.log("\n=========================================");
-  console.log(`Mode: ${APPLY ? "APPLY (deleting)" : "DRY RUN"}`);
+  console.log(`Mode: ${APPLY ? "APPLY (relabeling + otp purge)" : "DRY RUN"}`);
   console.log(`Stale threshold: ${STALE_HOURS} hours`);
+  console.log("Orders are RETAINED (marked ABANDONED_PAYMENT), not deleted.");
   console.log("=========================================\n");
 
-  const ordersDeleted = await cleanupStaleOrders();
+  const ordersRelabelled = await relabelStaleOrders();
   const otpsDeleted = await cleanupExpiredOtps();
 
   console.log("\n=========================================");
   console.log(
-    `Done. ${APPLY ? "Deleted" : "Would delete"}: ${ordersDeleted} order(s), ${otpsDeleted} OTP code(s).`
+    `Done. ${APPLY ? "Marked abandoned" : "Would mark abandoned"}: ${ordersRelabelled} order(s) (retained). ${APPLY ? "Deleted" : "Would delete"}: ${otpsDeleted} OTP code(s).`
   );
   if (!APPLY) {
-    console.log("Re-run with --apply to actually delete.");
+    console.log("Re-run with --apply to actually relabel orders + purge OTPs.");
   }
   console.log("=========================================\n");
 }

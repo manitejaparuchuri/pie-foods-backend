@@ -18,14 +18,25 @@ const normalizeTrialPack = (trialPack: any) => ({
 
 const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
 
+const normalizeAnnouncement = (a: any) => ({
+  enabled: a.enabled !== false,
+  message: String(a.message || ""),
+  coupon_code: String(a.coupon_code || "").toUpperCase(),
+  cta_label: String(a.cta_label || ""),
+  cta_link: String(a.cta_link || ""),
+});
+
 export const getStorefrontSettings = async (_req: Request, res: Response) => {
   try {
-    const [trialPack, shippingConfig] = await Promise.all([
+    const [trialPack, shippingConfig, announcement] = await Promise.all([
       withCache("catalog:storefront:trial-pack", FIVE_MIN, () =>
         firestoreCatalogService.getTrialPack()
       ),
       withCache("catalog:storefront:shipping", FIVE_MIN, () =>
         firestoreCatalogService.getShippingConfig()
+      ),
+      withCache("catalog:storefront:announcement", FIVE_MIN, () =>
+        firestoreCatalogService.getAnnouncement()
       ),
     ]);
 
@@ -42,6 +53,8 @@ export const getStorefrontSettings = async (_req: Request, res: Response) => {
       free_shipping_threshold: Number(shippingConfig.free_shipping_threshold),
       cod_surcharge: Number(shippingConfig.cod_surcharge),
       trial_pack: normalizeTrialPack(trialPack),
+      // Admin-editable top announcement bar / welcome-offer.
+      announcement: normalizeAnnouncement(announcement),
     });
   } catch (error) {
     console.error("GET STOREFRONT SETTINGS ERROR:", error);
