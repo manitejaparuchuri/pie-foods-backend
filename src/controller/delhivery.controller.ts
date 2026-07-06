@@ -11,7 +11,12 @@ import {
   isDelhiveryConfigured,
   ShipmentPayload,
 } from "../services/delhivery.service";
-import { notifyCustomerOrderShipped } from "../services/order-notifications.service";
+import {
+  notifyCustomerOrderShipped,
+  notifyCustomerOrderOutForDelivery,
+  notifyCustomerOrderDelivered,
+  notifyCustomerOrderCancelled,
+} from "../services/order-notifications.service";
 
 const ordersCollection = firestore.collection("orders");
 const usersCollection = firestore.collection("users");
@@ -622,6 +627,31 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
     }
 
     await ordersCollection.doc(orderId).update(updateData);
+
+    // Email the customer about this manual status change (best-effort; each
+    // notifier is idempotent so it won't double-send if the tracking cron also
+    // fires). Cancellations and deliveries especially should reach the customer.
+    const order = orderSnap.data() as Record<string, unknown>;
+    if (newStatus === "CANCELLED") {
+      notifyCustomerOrderCancelled(orderId).catch((err) =>
+        console.error("cancel notify failed:", err)
+      );
+    } else if (newStatus === "DELIVERED") {
+      notifyCustomerOrderDelivered(orderId).catch((err) =>
+        console.error("delivered notify failed:", err)
+      );
+    } else if (newStatus === "OUT_FOR_DELIVERY") {
+      notifyCustomerOrderOutForDelivery(orderId).catch((err) =>
+        console.error("ofd notify failed:", err)
+      );
+    } else if (newStatus === "SHIPPED") {
+      const waybill = String(order.tracking_waybill || "");
+      if (waybill) {
+        notifyCustomerOrderShipped(orderId, waybill).catch((err) =>
+          console.error("shipped notify failed:", err)
+        );
+      }
+    }
 
     return res.json({
       message: `Order status updated to ${newStatus}`,

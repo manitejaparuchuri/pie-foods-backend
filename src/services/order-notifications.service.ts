@@ -1,6 +1,7 @@
 import { Timestamp } from "firebase-admin/firestore";
 import { firestore } from "../config/firebase";
 import {
+  sendOrderCancelledEmail,
   sendOrderConfirmedEmailToCustomer,
   sendOrderDeliveredEmail,
   sendOrderOutForDeliveryEmail,
@@ -354,6 +355,36 @@ export async function notifyCustomerOrderDelivered(
     });
   } catch (err) {
     console.error("notifyCustomerOrderDelivered error:", err);
+  }
+}
+
+/**
+ * "Your order has been cancelled." — best-effort, never throws.
+ * Idempotent via `cancelled_notified_at` so re-marking CANCELLED doesn't re-spam.
+ */
+export async function notifyCustomerOrderCancelled(
+  orderId: string
+): Promise<void> {
+  try {
+    const ctx = await loadStatusChangeContext(orderId);
+    if (!ctx) return;
+    if (ctx.data.cancelled_notified_at) return; // already sent
+
+    await sendOrderCancelledEmail({
+      orderId,
+      displayOrderId: ctx.data.order_number
+        ? String(ctx.data.order_number)
+        : undefined,
+      customerEmail: ctx.customerEmail,
+      customerName: ctx.customerName || undefined,
+      trackingUrl: ctx.trackingUrl,
+    });
+
+    await ordersCollection.doc(orderId).update({
+      cancelled_notified_at: Timestamp.now(),
+    });
+  } catch (err) {
+    console.error("notifyCustomerOrderCancelled error:", err);
   }
 }
 

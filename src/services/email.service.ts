@@ -630,6 +630,83 @@ Issue with the order? Reply within 7 days and we'll make it right.
 }
 
 /* ===================================================================
+   Order cancelled email (customer-facing)
+   =================================================================== */
+
+export async function sendOrderCancelledEmail(
+  data: StatusChangeEmailData
+): Promise<boolean> {
+  if (!data.customerEmail) return false;
+  const displayId = (data.displayOrderId || "").trim() || data.orderId.slice(0, 12);
+  const subject = `Your PIE Foods order ${displayId} has been cancelled`;
+
+  const html = `
+<div style="margin:0;padding:24px;background:#f3f7fa;font-family:Arial,Helvetica,sans-serif;color:#1f2937;">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:680px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;">
+    <tr>
+      <td style="background:#b42318;padding:20px 24px;color:#fff;">
+        <div style="font-size:22px;font-weight:700;">PIE Foods</div>
+        <div style="font-size:13px;opacity:0.95;margin-top:6px;">Order cancelled</div>
+      </td>
+    </tr>
+    <tr>
+      <td style="padding:22px 24px;">
+        <p style="font-size:15px;color:#111827;margin:0 0 14px;">
+          Hi${data.customerName ? " " + escapeHtml(data.customerName) : ""},
+        </p>
+        <p style="font-size:14px;color:#374151;line-height:1.6;margin:0 0 18px;">
+          Your PIE Foods order <strong>${escapeHtml(displayId)}</strong> has been
+          <strong style="color:#b42318;">cancelled</strong>. It will not be shipped.
+        </p>
+
+        <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:16px 18px;margin-bottom:18px;">
+          <div style="font-size:14px;color:#991b1b;line-height:1.5;">
+            If you paid online, any eligible refund is processed to your original payment method
+            and typically reflects within 5–7 business days. If this cancellation is a mistake or
+            you have any questions, just reply to this email.
+          </div>
+        </div>
+
+        <div style="text-align:center;margin-bottom:22px;">
+          <a href="https://www.piefoods.com/products" style="display:inline-block;background:#2f3b2d;color:#fff;text-decoration:none;padding:12px 26px;border-radius:10px;font-weight:600;font-size:14px;">Continue shopping</a>
+        </div>
+
+        <p style="margin:0;font-size:13px;color:#6b7280;line-height:1.6;">
+          Need help? Reach us any time at info&#64;piefoods.com.
+        </p>
+        <p style="margin:18px 0 0;font-size:13px;color:#111827;font-weight:600;">— Team PIE Foods</p>
+      </td>
+    </tr>
+  </table>
+</div>
+  `.trim();
+
+  const text = `
+Hi${data.customerName ? " " + data.customerName : ""},
+
+Your PIE Foods order ${displayId} has been CANCELLED. It will not be shipped.
+
+If you paid online, any eligible refund goes back to your original payment method
+(typically 5-7 business days). If this is a mistake or you have questions, just reply
+to this email.
+
+Continue shopping: https://www.piefoods.com/products
+
+Need help? info@piefoods.com
+
+— Team PIE Foods
+  `.trim();
+
+  return sendEmail({
+    to: data.customerEmail,
+    toName: data.customerName,
+    subject,
+    html,
+    text,
+  });
+}
+
+/* ===================================================================
    New-customer welcome email
    =================================================================== */
 
