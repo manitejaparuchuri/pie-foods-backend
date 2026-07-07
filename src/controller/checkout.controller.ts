@@ -13,6 +13,7 @@ import {
 } from "../services/pricing.service";
 import { fetchProductsByIds } from "../services/product-lookup.service";
 import firestoreCatalogService from "../services/catalog-firestore.service";
+import { generateOrderNumber } from "../services/order-number.service";
 
 /** Map the Firestore shipping-config doc onto the pricing engine override. */
 const loadPricingShippingConfig = async () => {
@@ -95,6 +96,10 @@ export const checkout = async (req: AuthRequest, res: Response) => {
     // both the pre-coupon and final totals charge a consistent fee.
     const shippingConfig = await loadPricingShippingConfig();
 
+    // Friendly PF-order-number (same as the guest + COD paths). Generated
+    // before the txn (it runs its own counter transaction).
+    const orderNumber = await generateOrderNumber();
+
     const result = await firestore.runTransaction(async (tx) => {
       const preCouponTotals = calculateTotalsFromSubtotal(
         subtotalPaise,
@@ -132,6 +137,7 @@ export const checkout = async (req: AuthRequest, res: Response) => {
 
       tx.set(orderRef, {
         order_id: orderRef.id,
+        order_number: orderNumber,
         user_id: uid,
         status: "PENDING_PAYMENT",
         shipping_id: shippingId,
@@ -141,6 +147,10 @@ export const checkout = async (req: AuthRequest, res: Response) => {
         coupon_code: appliedCoupon?.code || null,
         subtotal_amount: totals.subtotalAmount,
         coupon_discount_amount: totals.couponDiscountAmount,
+        shipping_amount: totals.shippingAmount,
+        cod_surcharge_amount: totals.codSurchargeAmount,
+        cgst_amount: totals.cgstAmount,
+        sgst_amount: totals.sgstAmount,
         final_amount: totals.totalAmount,
         total_amount: totals.totalAmount,
         items: itemsForStorage,
