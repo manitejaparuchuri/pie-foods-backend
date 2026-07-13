@@ -38,7 +38,23 @@ const BUSINESS = {
   mobile: env("BUSINESS_MOBILE", "8188843334"),
   email: env("BUSINESS_EMAIL", "piefoodsonline@gmail.com"),
   jurisdiction: env("BUSINESS_JURISDICTION_CITY", "Krishna"),
+  // State of the registered business address — used to decide whether a
+  // supply is intra-state (CGST + SGST) or inter-state (IGST) on the tax
+  // invoice. Compare against the customer's shipping-address state.
+  state: env("BUSINESS_STATE", "Andhra Pradesh"),
 };
+
+/**
+ * Intra-state (customer's state == business state) → tax is split as
+ * CGST + SGST. Inter-state → single IGST line. Compares case-insensitively
+ * on the state name; falls back to intra-state when the customer state is
+ * missing (safer for backward-compat — matches what we did before).
+ */
+function isIntraStateSupply(customerState?: string | null): boolean {
+  const cust = String(customerState || "").trim().toLowerCase();
+  if (!cust) return true;
+  return BUSINESS.state.trim().toLowerCase() === cust;
+}
 
 const COLORS = {
   brand: "#2f3b2d",
@@ -447,20 +463,11 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<Buffer> {
       }
       y += headerRowH;
 
-      /* Item rows. Six columns, no per-line tax — tax breakdown sits in its
-         own block below the table (same shape as the website summary). */
+      /* Item rows. Six columns, no per-line tax — the tax breakdown sits in
+         its own block below the table (grouped by GST rate class). */
       const itemRowH = 26;
       const singleLineY = (rowY: number, lineHeight = 10) =>
         rowY + (itemRowH - lineHeight) / 2;
-
-      // We still need running totals for the breakdown box (CGST/SGST below),
-      // since each item can have its own tax %.
-      let runningGoods = 0;
-      let runningCgst = 0;
-      let runningSgst = 0;
-      // Track tax rates seen — used to label the CGST/SGST rows nicely when
-      // every item shares the same rate.
-      const taxRatesSeen = new Set<number>();
 
       doc.font("Helvetica").fontSize(8).fillColor(COLORS.text);
       data.items.forEach((item, idx) => {
@@ -474,21 +481,7 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<Buffer> {
         const price = Number(item.price) || 0;
         const discountPct =
           mrp > price ? Math.round(((mrp - price) / mrp) * 100) : 0;
-
-        const taxPercent =
-          typeof item.taxPercent === "number" && item.taxPercent >= 0
-            ? item.taxPercent
-            : 5;
-        taxRatesSeen.add(taxPercent);
         const lineTotal = Number(item.lineTotal) || 0;
-        const goodsBase = lineTotal / (1 + taxPercent / 100);
-        const lineTax = lineTotal - goodsBase;
-        const lineGoods = Math.round(goodsBase * 100) / 100;
-        const lineCgst = Math.round((lineTax / 2) * 100) / 100;
-        const lineSgst = Math.round((lineTotal - lineGoods - lineCgst) * 100) / 100;
-        runningGoods += lineGoods;
-        runningCgst += lineCgst;
-        runningSgst += lineSgst;
 
         const topLineTexts = [
           String(idx + 1),
@@ -535,27 +528,14 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<Buffer> {
       });
 
       /* --------- 5. Breakdown rows — mirrors the website order summary --------- */
-      // Sub Total = sum of (rate × qty) = sum of AMOUNT column (inclusive of GST).
-      // CGST / SGST are INFORMATIONAL — they're already inside Sub Total, never
-      // added on top. TOTAL = Sub Total + Shipping + COD.
+      // Sub Total = sum of AMOUNT column (inclusive of GST).
+      // Coupon (if any), a proper Tax Breakdown table (grouped by rate),
+      // Shipping, COD, and GRAND TOTAL follow. Everything reconciles to
+      // Sub Total − Coupon + Shipping + COD.
       const itemsSubtotal = data.items.reduce(
         (s, i) => s + (Number(i.lineTotal) || 0),
         0
       );
-
-      // Label CGST/SGST rows with the single rate when every item shares one,
-      // otherwise leave the rate off (mixed-rate orders).
-      const singleRate =
-        taxRatesSeen.size === 1 ? Array.from(taxRatesSeen)[0] : null;
-      const halfRateLabel =
-        singleRate === null
-          ? ""
-          : (() => {
-              const h = singleRate / 2;
-              return h === Math.floor(h)
-                ? ` @${h}%`
-                : ` @${h.toFixed(1)}%`;
-            })();
 
       const summaryRowH = 18;
       const drawSummaryRow = (
@@ -600,47 +580,204 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<Buffer> {
         y += h;
       };
 
-      drawSummaryRow("Sub Total", itemsSubtotal);
+      /* --------- 5A. Sub Total row (inclusive of GST) --------- */
+      drawSummaryRow("Sub Total (Incl. GST)", itemsSubtotal);
 
-      // Coupon discount MUST appear on the tax invoice — Section 15(3) CGST
-      // Act requires any pre-agreed discount to be deducted from the value
-      // of supply. Amazon / Flipkart / Meesho all show it as a separate line;
-      // hiding it would mean charging tax on the pre-discount amount, which
-      // over-collects GST and creates an audit hole.
+      /* --------- 5B. Coupon Discount (if any) --------- */
+      // Section 15(3) CGST Act — any pre-agreed discount MUST appear on the
+      // tax invoice and reduce the value of supply. Amazon / Flipkart show
+      // this as a separate line for the same reason.
       if (data.couponDiscountAmount > 0) {
-        drawSummaryRow(`Coupon Discount`, -data.couponDiscountAmount);
+        drawSummaryRow("Coupon Discount", -data.couponDiscountAmount);
       }
 
-      // Re-derive Taxable / CGST / SGST on the POST-coupon amount so the
-      // breakdown reflects what the customer was actually taxed on. When
-      // there's no coupon this collapses to the per-item running totals.
-      let taxableValueShown = runningGoods;
-      let cgstShown = runningCgst;
-      let sgstShown = runningSgst;
-      if (data.couponDiscountAmount > 0 && singleRate !== null) {
-        const netAfterCoupon = itemsSubtotal - data.couponDiscountAmount;
-        taxableValueShown = netAfterCoupon / (1 + singleRate / 100);
-        const totalTax = netAfterCoupon - taxableValueShown;
-        cgstShown = totalTax / 2;
-        sgstShown = totalTax - cgstShown;
-      } else if (data.couponDiscountAmount > 0 && itemsSubtotal > 0) {
-        // Mixed tax rates + coupon — prorate proportionally.
-        const ratio = (itemsSubtotal - data.couponDiscountAmount) / itemsSubtotal;
-        taxableValueShown = runningGoods * ratio;
-        cgstShown = runningCgst * ratio;
-        sgstShown = runningSgst * ratio;
+      /* --------- 5C. Tax Breakdown Table (grouped by GST rate class) ---
+       * Each row = one tax rate. Splits into CGST + SGST when supply is
+       * intra-state (customer's state == business state), IGST when
+       * inter-state. Coupon is prorated proportionally so the taxable
+       * value reflects what the customer was actually charged tax on.
+       */
+      y += 4;
+      const netAfterCoupon = itemsSubtotal - data.couponDiscountAmount;
+      const couponRatio =
+        itemsSubtotal > 0 ? netAfterCoupon / itemsSubtotal : 1;
+
+      // Group items by tax rate and accumulate taxable + tax (post-coupon).
+      const rateGroups = new Map<
+        number,
+        { rate: number; taxable: number; taxAmount: number }
+      >();
+      for (const item of data.items) {
+        const rate =
+          typeof item.taxPercent === "number" && item.taxPercent >= 0
+            ? item.taxPercent
+            : 5;
+        const lineTotal = Number(item.lineTotal) || 0;
+        const goodsBase = lineTotal / (1 + rate / 100);
+        const tax = lineTotal - goodsBase;
+        const g = rateGroups.get(rate) ?? {
+          rate,
+          taxable: 0,
+          taxAmount: 0,
+        };
+        g.taxable += goodsBase * couponRatio;
+        g.taxAmount += tax * couponRatio;
+        rateGroups.set(rate, g);
+      }
+      const groupsSorted = Array.from(rateGroups.values()).sort(
+        (a, b) => a.rate - b.rate
+      );
+
+      // Determine supply type once per invoice from the ship-to state.
+      const isIntra = isIntraStateSupply(data.shippingAddress?.state);
+
+      // Column layout for the breakdown table — intra-state has an extra
+      // column because tax splits into CGST + SGST; inter-state uses one
+      // IGST column instead.
+      const bdColWidths = isIntra
+        ? [
+            pageWidth * 0.22, // CLASS
+            pageWidth * 0.22, // TAXABLE VALUE
+            pageWidth * 0.18, // CGST
+            pageWidth * 0.18, // SGST
+            pageWidth * 0.2, // TAX AMOUNT
+          ]
+        : [
+            pageWidth * 0.24, // CLASS
+            pageWidth * 0.28, // TAXABLE VALUE
+            pageWidth * 0.24, // IGST
+            pageWidth * 0.24, // TAX AMOUNT
+          ];
+      const bdTitles = isIntra
+        ? ["CLASS", "TAXABLE VALUE", "CGST", "SGST", "TAX AMOUNT"]
+        : ["CLASS", "TAXABLE VALUE", "IGST", "TAX AMOUNT"];
+      const bdAligns: Array<"left" | "right"> = isIntra
+        ? ["left", "right", "right", "right", "right"]
+        : ["left", "right", "right", "right"];
+      const bdColXs: number[] = [];
+      {
+        let cx = pageLeft;
+        for (const w of bdColWidths) {
+          bdColXs.push(cx);
+          cx += w;
+        }
       }
 
-      drawSummaryRow(`Taxable Value`, taxableValueShown, { muted: true });
-      drawSummaryRow(`CGST${halfRateLabel} (incl.)`, cgstShown, { muted: true });
-      drawSummaryRow(`SGST${halfRateLabel} (incl.)`, sgstShown, { muted: true });
+      // Header row (highlighted)
+      const bdHeaderH = 20;
+      doc
+        .rect(pageLeft, y, pageWidth, bdHeaderH)
+        .fillColor(COLORS.headerBg)
+        .fill();
+      doc
+        .rect(pageLeft, y, pageWidth, bdHeaderH)
+        .strokeColor(COLORS.border)
+        .stroke();
+      doc.font("Helvetica-Bold").fontSize(8).fillColor(COLORS.text);
+      bdTitles.forEach((title, idx) => {
+        doc.text(title, bdColXs[idx] + 4, y + 7, {
+          width: bdColWidths[idx] - 8,
+          align: idx === 0 ? "left" : "right",
+        });
+      });
+      for (let i = 1; i < bdColXs.length; i += 1) {
+        doc.moveTo(bdColXs[i], y).lineTo(bdColXs[i], y + bdHeaderH).stroke();
+      }
+      y += bdHeaderH;
+
+      // One row per rate class, then a bold TOTAL row.
+      const bdRowH = 18;
+      let bdTotalTaxable = 0;
+      let bdTotalCgst = 0;
+      let bdTotalSgst = 0;
+      let bdTotalIgst = 0;
+      let bdTotalTax = 0;
+      for (const g of groupsSorted) {
+        const cgst = g.taxAmount / 2;
+        const sgst = g.taxAmount - cgst;
+        bdTotalTaxable += g.taxable;
+        bdTotalTax += g.taxAmount;
+        if (isIntra) {
+          bdTotalCgst += cgst;
+          bdTotalSgst += sgst;
+        } else {
+          bdTotalIgst += g.taxAmount;
+        }
+        const label = isIntra
+          ? `GST ${g.rate.toFixed(2)}%`
+          : `IGST ${g.rate.toFixed(2)}%`;
+        const values = isIntra
+          ? [
+              label,
+              g.taxable.toFixed(2),
+              cgst.toFixed(2),
+              sgst.toFixed(2),
+              g.taxAmount.toFixed(2),
+            ]
+          : [
+              label,
+              g.taxable.toFixed(2),
+              g.taxAmount.toFixed(2),
+              g.taxAmount.toFixed(2),
+            ];
+        doc.rect(pageLeft, y, pageWidth, bdRowH).strokeColor(COLORS.border).stroke();
+        for (let i = 1; i < bdColXs.length; i += 1) {
+          doc.moveTo(bdColXs[i], y).lineTo(bdColXs[i], y + bdRowH).stroke();
+        }
+        doc.font("Helvetica").fontSize(8).fillColor(COLORS.text);
+        values.forEach((val, idx) => {
+          doc.text(val, bdColXs[idx] + 4, y + 5, {
+            width: bdColWidths[idx] - 8,
+            align: bdAligns[idx],
+          });
+        });
+        y += bdRowH;
+      }
+
+      // TOTAL row (highlighted + bold)
+      doc
+        .rect(pageLeft, y, pageWidth, bdRowH)
+        .fillColor(COLORS.headerBg)
+        .fill();
+      doc.rect(pageLeft, y, pageWidth, bdRowH).strokeColor(COLORS.border).stroke();
+      for (let i = 1; i < bdColXs.length; i += 1) {
+        doc.moveTo(bdColXs[i], y).lineTo(bdColXs[i], y + bdRowH).stroke();
+      }
+      doc.font("Helvetica-Bold").fontSize(8).fillColor(COLORS.text);
+      const bdTotalRow = isIntra
+        ? [
+            "TOTAL",
+            bdTotalTaxable.toFixed(2),
+            bdTotalCgst.toFixed(2),
+            bdTotalSgst.toFixed(2),
+            bdTotalTax.toFixed(2),
+          ]
+        : [
+            "TOTAL",
+            bdTotalTaxable.toFixed(2),
+            bdTotalIgst.toFixed(2),
+            bdTotalTax.toFixed(2),
+          ];
+      bdTotalRow.forEach((val, idx) => {
+        doc.text(val, bdColXs[idx] + 4, y + 5, {
+          width: bdColWidths[idx] - 8,
+          align: bdAligns[idx],
+        });
+      });
+      y += bdRowH + 6;
+
+      /* --------- 5D. Charges (shipping + COD, if any) --------- */
       if (data.shippingAmount > 0) drawSummaryRow("Shipping", data.shippingAmount);
       if (data.codSurchargeAmount > 0)
         drawSummaryRow("COD Surcharge", data.codSurchargeAmount);
 
-      // Grand TOTAL — what the customer paid. Equals
-      // Sub Total − Coupon Discount + Shipping + COD.
-      drawSummaryRow("TOTAL", data.totalAmount, { bold: true, filled: true });
+      /* --------- 5E. GRAND TOTAL — what the customer actually paid.
+       *              = Sub Total − Coupon + Shipping + COD.
+       */
+      drawSummaryRow("GRAND TOTAL", data.totalAmount, {
+        bold: true,
+        filled: true,
+      });
       y += 12;
 
       /* --------- 6. TOTAL AMOUNT IN WORDS --------- */
