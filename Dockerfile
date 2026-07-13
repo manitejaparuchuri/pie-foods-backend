@@ -23,6 +23,12 @@ COPY tsconfig.json ./
 COPY src ./src
 RUN npm run build
 
+# `tsc` only emits .js/.d.ts — static assets (logo, signature images used
+# by the invoice PDF generator) are NOT copied. Explicitly mirror the
+# src/assets tree into dist/assets so runtime code that reads from
+# `path.resolve(__dirname, "..", "assets")` finds the files.
+RUN cp -r src/assets dist/assets
+
 
 # ---- Runtime stage ----
 FROM node:20-slim AS runtime
