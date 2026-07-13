@@ -90,12 +90,18 @@ export const buildPricedItemsAndSubtotal = (
   items: PricingInputItem[]
 ): { pricedItems: PricedItem[]; subtotalPaise: number } => {
   const pricedItems = items.map((item) => {
-    const mrpPaise = toPaise(item.mrpRupees);
+    const mrpRupees = Number(item.mrpRupees) || 0;
+    const mrpPaise = toPaise(mrpRupees);
     const rate =
       item.discountPercent === undefined || item.discountPercent === null
         ? ORDER_DISCOUNT_RATE
         : Math.min(Math.max(Number(item.discountPercent) || 0, 0), 90) / 100;
-    const discountedPricePaise = Math.round(mrpPaise * (1 - rate));
+    // Truncate to WHOLE rupees per unit — never store or charge paisa.
+    // If the sticker says ₹129/unit, qty 5 must be exactly ₹645 (not ₹647
+    // from a 0.35 carry). Drops everything after the decimal regardless
+    // of whether it's below or above 0.5.
+    const discountedPriceRupees = Math.floor(mrpRupees * (1 - rate));
+    const discountedPricePaise = toPaise(discountedPriceRupees);
     const quantity = Math.max(0, Number(item.quantity) || 0);
     const lineTotalPaise = discountedPricePaise * quantity;
 
