@@ -601,14 +601,45 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<Buffer> {
       };
 
       drawSummaryRow("Sub Total", itemsSubtotal);
-      drawSummaryRow(`Taxable Value`, runningGoods, { muted: true });
-      drawSummaryRow(`CGST${halfRateLabel} (incl.)`, runningCgst, { muted: true });
-      drawSummaryRow(`SGST${halfRateLabel} (incl.)`, runningSgst, { muted: true });
+
+      // Coupon discount MUST appear on the tax invoice — Section 15(3) CGST
+      // Act requires any pre-agreed discount to be deducted from the value
+      // of supply. Amazon / Flipkart / Meesho all show it as a separate line;
+      // hiding it would mean charging tax on the pre-discount amount, which
+      // over-collects GST and creates an audit hole.
+      if (data.couponDiscountAmount > 0) {
+        drawSummaryRow(`Coupon Discount`, -data.couponDiscountAmount);
+      }
+
+      // Re-derive Taxable / CGST / SGST on the POST-coupon amount so the
+      // breakdown reflects what the customer was actually taxed on. When
+      // there's no coupon this collapses to the per-item running totals.
+      let taxableValueShown = runningGoods;
+      let cgstShown = runningCgst;
+      let sgstShown = runningSgst;
+      if (data.couponDiscountAmount > 0 && singleRate !== null) {
+        const netAfterCoupon = itemsSubtotal - data.couponDiscountAmount;
+        taxableValueShown = netAfterCoupon / (1 + singleRate / 100);
+        const totalTax = netAfterCoupon - taxableValueShown;
+        cgstShown = totalTax / 2;
+        sgstShown = totalTax - cgstShown;
+      } else if (data.couponDiscountAmount > 0 && itemsSubtotal > 0) {
+        // Mixed tax rates + coupon — prorate proportionally.
+        const ratio = (itemsSubtotal - data.couponDiscountAmount) / itemsSubtotal;
+        taxableValueShown = runningGoods * ratio;
+        cgstShown = runningCgst * ratio;
+        sgstShown = runningSgst * ratio;
+      }
+
+      drawSummaryRow(`Taxable Value`, taxableValueShown, { muted: true });
+      drawSummaryRow(`CGST${halfRateLabel} (incl.)`, cgstShown, { muted: true });
+      drawSummaryRow(`SGST${halfRateLabel} (incl.)`, sgstShown, { muted: true });
       if (data.shippingAmount > 0) drawSummaryRow("Shipping", data.shippingAmount);
       if (data.codSurchargeAmount > 0)
         drawSummaryRow("COD Surcharge", data.codSurchargeAmount);
 
-      // Grand TOTAL — what the customer paid. Equals Sub Total + Shipping + COD.
+      // Grand TOTAL — what the customer paid. Equals
+      // Sub Total − Coupon Discount + Shipping + COD.
       drawSummaryRow("TOTAL", data.totalAmount, { bold: true, filled: true });
       y += 12;
 

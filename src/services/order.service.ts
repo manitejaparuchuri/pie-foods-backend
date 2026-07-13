@@ -74,6 +74,10 @@ interface CartLineForOrder {
   product_id: number;
   quantity: number;
   price: number;
+  /** Per-product discount % (0..100). Must be passed to the pricing engine so
+   *  the customer is charged the same rate they saw in cart. Null means the
+   *  product predates the field — pricing falls back to the flat 20% default. */
+  discount_percent: number | null;
   /** Per-product GST rate to snapshot onto the order item for invoice rendering. */
   tax_percent: number;
   name: string;
@@ -101,6 +105,7 @@ async function loadCartLines(uid: string): Promise<CartLineForOrder[]> {
         product_id: productId,
         quantity: Number(data.quantity) || 0,
         price: product.price,
+        discount_percent: product.discount_percent,
         tax_percent: product.tax_percent,
         name: product.name,
         image_url: product.image_url,
@@ -148,6 +153,12 @@ class OrderService {
         productId: line.product_id,
         quantity: line.quantity,
         mrpRupees: line.price,
+        // Pass each product's own discount % so the price we charge matches
+        // what the customer saw in cart. Previously we omitted this and the
+        // pricing engine fell back to a flat 20% for logged-in COD orders,
+        // even when the product listing advertised 35%. That's the ₹129 vs
+        // ₹159 gap the client complained about.
+        discountPercent: line.discount_percent,
       }))
     );
 
