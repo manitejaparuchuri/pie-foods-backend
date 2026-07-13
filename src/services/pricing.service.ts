@@ -1,4 +1,16 @@
-export const ORDER_DISCOUNT_RATE = Number(process.env.ORDER_DISCOUNT_RATE || 0.2);
+/**
+ * Fallback discount used ONLY when a product row is missing its own
+ * discount_percent field. Kept at 0 so an unconfigured product sells at
+ * MRP — the admin has to explicitly opt every product into a discount.
+ *
+ * (Historically this was 0.2, a legacy from when the store had a
+ * site-wide 20% sale; that silently applied 20% off to products where
+ * the admin hadn't set anything. Removed.)
+ *
+ * Still env-overridable for the rare case the business wants to
+ * re-enable a store-wide default without touching the code.
+ */
+export const ORDER_DISCOUNT_RATE = Number(process.env.ORDER_DISCOUNT_RATE || 0);
 
 /**
  * GST model used by PIE Foods: all listed product prices are INCLUSIVE of
@@ -52,7 +64,9 @@ export interface PricingInputItem {
   productId: number;
   quantity: number;
   mrpRupees: number;
-  /** Per-product discount (0..100). Falls back to the global ORDER_DISCOUNT_RATE when omitted. */
+  /** Per-product discount (0..100). Omit / pass null only when the product
+   *  has no discount configured — the pricing engine will then charge MRP
+   *  (unless the ORDER_DISCOUNT_RATE env override is explicitly non-zero). */
   discountPercent?: number | null;
 }
 
