@@ -166,6 +166,7 @@ export async function createGuestOrder(
         mrpRupees: product.price,
         discountPercent: product.discount_percent,
         taxPercent: product.tax_percent,
+        freeShipping: product.free_shipping,
         name: product.name,
         imageUrl: product.image_url,
       };
@@ -185,12 +186,16 @@ export async function createGuestOrder(
     }))
   );
 
+  // Free delivery for the whole order when any item is flagged free_shipping.
+  const hasFreeShippingItem = pricingInputs.some((p) => p.freeShipping);
+
   const shippingConfig = await loadPricingShippingConfig();
   const totals = calculateTotalsFromSubtotal(
     subtotalPaise,
     0,
     paymentMethod,
-    shippingConfig
+    shippingConfig,
+    hasFreeShippingItem
   );
 
   if (totals.totalAmount <= 0) {

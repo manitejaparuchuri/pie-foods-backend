@@ -92,6 +92,11 @@ export const checkout = async (req: AuthRequest, res: Response) => {
       }))
     );
 
+    // Whole-order free delivery when any item is flagged free_shipping.
+    const hasFreeShippingItem = parsedItems.some(
+      (item) => productMap.get(item.product_id)?.free_shipping === true
+    );
+
     // Live (admin-editable) shipping knobs — fetched once before the txn so
     // both the pre-coupon and final totals charge a consistent fee.
     const shippingConfig = await loadPricingShippingConfig();
@@ -105,7 +110,8 @@ export const checkout = async (req: AuthRequest, res: Response) => {
         subtotalPaise,
         0,
         "RAZORPAY",
-        shippingConfig
+        shippingConfig,
+        hasFreeShippingItem
       );
       const appliedCoupon = await validateCouponForAmount(
         tx,
@@ -117,7 +123,8 @@ export const checkout = async (req: AuthRequest, res: Response) => {
         subtotalPaise,
         appliedCoupon?.discountAmount || 0,
         "RAZORPAY",
-        shippingConfig
+        shippingConfig,
+        hasFreeShippingItem
       );
 
       const orderRef = ordersCollection.doc();

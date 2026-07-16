@@ -146,7 +146,11 @@ export const calculateTotalsFromSubtotal = (
   subtotalPaise: number,
   couponDiscountRupees = 0,
   paymentMethod: PaymentMethodForPricing = "RAZORPAY",
-  shippingConfig?: Partial<ShippingConfig> | null
+  shippingConfig?: Partial<ShippingConfig> | null,
+  /** When true, delivery is free regardless of the subtotal threshold — used
+   *  when the cart contains a product flagged free_shipping (e.g. the monk
+   *  fruit range). COD surcharge is unaffected. */
+  freeShipping = false
 ): PricingTotals => {
   const subtotal = Math.max(0, subtotalPaise);
   const couponDiscountPaise = clampPaise(toPaise(couponDiscountRupees), 0, subtotal);
@@ -160,9 +164,10 @@ export const calculateTotalsFromSubtotal = (
   const shippingFee = numberOr(shippingConfig?.shippingFee, SHIPPING_FEE);
   const codSurcharge = numberOr(shippingConfig?.codSurcharge, COD_SURCHARGE);
 
-  // Shipping rules: free at/above the threshold, flat fee below.
+  // Shipping rules: free when the cart carries a free-shipping product, OR
+  // at/above the threshold; otherwise a flat fee below the threshold.
   const shippingFeePaise =
-    taxableSubtotalRupees >= freeThreshold
+    freeShipping || taxableSubtotalRupees >= freeThreshold
       ? 0
       : toPaise(shippingFee);
 
@@ -203,14 +208,16 @@ export const calculateOrderPricing = (
   items: PricingInputItem[],
   couponDiscountRupees = 0,
   paymentMethod: PaymentMethodForPricing = "RAZORPAY",
-  shippingConfig?: Partial<ShippingConfig> | null
+  shippingConfig?: Partial<ShippingConfig> | null,
+  freeShipping = false
 ): OrderPricingResult => {
   const { pricedItems, subtotalPaise } = buildPricedItemsAndSubtotal(items);
   const totals = calculateTotalsFromSubtotal(
     subtotalPaise,
     couponDiscountRupees,
     paymentMethod,
-    shippingConfig
+    shippingConfig,
+    freeShipping
   );
 
   return {

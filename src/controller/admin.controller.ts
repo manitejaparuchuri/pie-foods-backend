@@ -116,6 +116,7 @@ const normalizeFirestoreProductForAdmin = (product: any) => ({
   stock_quantity: Number(product.stock_quantity) || 0,
   category_id: Number(product.category_id) || 0,
   is_bestseller: product.is_bestseller === true || Number(product.is_bestseller) === 1 ? 1 : 0,
+  free_shipping: product.free_shipping === true || Number(product.free_shipping) === 1 ? 1 : 0,
   is_active: product.is_active === false ? 0 : 1,
   created_at: toIsoString(product.created_at),
 });
@@ -574,6 +575,18 @@ const buildProductPayload = (
     const bestsellerRaw = get("is_bestseller");
     payload.is_bestseller =
       bestsellerRaw === true || Number(bestsellerRaw) === 1 || String(bestsellerRaw).toLowerCase() === "true";
+  }
+
+  // Free-shipping flag: products with this set grant free delivery to the
+  // whole order (e.g. the monk fruit range). Same permissive parse as
+  // is_bestseller so a checkbox true / 1 / "true" all persist correctly.
+  if (
+    Object.prototype.hasOwnProperty.call(body, "free_shipping") ||
+    (existing && Object.prototype.hasOwnProperty.call(existing, "free_shipping"))
+  ) {
+    const freeShipRaw = get("free_shipping");
+    payload.free_shipping =
+      freeShipRaw === true || Number(freeShipRaw) === 1 || String(freeShipRaw).toLowerCase() === "true";
   }
 
   for (let i = 0; i <= 10; i += 1) {

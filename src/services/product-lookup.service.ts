@@ -11,6 +11,9 @@ export interface ProductSnapshot {
   discount_percent: number | null;
   /** Per-product inclusive GST rate (e.g. 5, 12, 18). Defaults to 5 when missing. */
   tax_percent: number;
+  /** When true, having this product in the cart makes the WHOLE order ship
+   *  free (e.g. the monk fruit range). Admin-controlled per product. */
+  free_shipping: boolean;
   image_url: string | null;
 }
 
@@ -62,6 +65,8 @@ export async function fetchProductsByIds(
             ? null
             : Number(data.discount_percent),
         tax_percent: taxValid ? taxRaw : 5,
+        free_shipping:
+          data.free_shipping === true || Number(data.free_shipping) === 1,
         image_url: (data.image_url as string) || null,
       });
     }

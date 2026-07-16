@@ -47,6 +47,9 @@ async function getCartRowsForUser(uid: string) {
       // endpoint to rehydrate their cart). Otherwise checkout falls back to
       // the storefront global rate and shows the wrong %.
       tax_percent: product?.tax_percent ?? null,
+      // Free-shipping flag so the checkout can show FREE delivery for
+      // rehydrated carts too (matches what the server will charge).
+      free_shipping: product?.free_shipping ?? false,
       image_url: product?.image_url || null,
     };
   });

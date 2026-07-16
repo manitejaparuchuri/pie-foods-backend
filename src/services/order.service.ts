@@ -80,6 +80,8 @@ interface CartLineForOrder {
   discount_percent: number | null;
   /** Per-product GST rate to snapshot onto the order item for invoice rendering. */
   tax_percent: number;
+  /** When true, this product grants free delivery to the whole order. */
+  free_shipping: boolean;
   name: string;
   image_url: string | null;
 }
@@ -107,6 +109,7 @@ async function loadCartLines(uid: string): Promise<CartLineForOrder[]> {
         price: product.price,
         discount_percent: product.discount_percent,
         tax_percent: product.tax_percent,
+        free_shipping: product.free_shipping,
         name: product.name,
         image_url: product.image_url,
       };
@@ -162,6 +165,9 @@ class OrderService {
       }))
     );
 
+    // Whole-order free delivery when any cart line is a free-shipping product.
+    const hasFreeShippingItem = cartLines.some((line) => line.free_shipping);
+
     // Pre-generate the friendly order number (its own atomic txn).
     // If the order-create txn fails, the counter still ticks forward — a
     // small gap in the sequence is harmless.
@@ -176,7 +182,8 @@ class OrderService {
         subtotalPaise,
         0,
         normalizedPaymentMethod,
-        shippingConfig
+        shippingConfig,
+        hasFreeShippingItem
       );
       const appliedCoupon: AppliedCoupon | null = await validateCouponForAmount(
         tx,
@@ -188,7 +195,8 @@ class OrderService {
         subtotalPaise,
         appliedCoupon?.discountAmount || 0,
         normalizedPaymentMethod,
-        shippingConfig
+        shippingConfig,
+        hasFreeShippingItem
       );
 
       // COD: reserve stock now (atomic, reads-before-writes). Prepaid orders
