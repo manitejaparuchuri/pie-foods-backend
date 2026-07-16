@@ -603,16 +603,26 @@ export async function generateInvoicePdf(data: InvoiceData): Promise<Buffer> {
         itemsSubtotal > 0 ? netAfterCoupon / itemsSubtotal : 1;
 
       // Group items by tax rate and accumulate taxable + tax (post-coupon).
+      // We PRE-SEED the standard Indian GST slabs (0 / 5 / 12 / 18 %) so the
+      // breakdown table ALWAYS shows every rate class with 0.00 when unused —
+      // this matches the format the client (Teja) sent as reference and is
+      // the format Indian accountants / GSTR-1 filings expect. Any additional
+      // non-standard rate a product happens to carry (e.g. 28) is appended.
+      const STANDARD_GST_RATES = [0, 5, 12, 18];
       const rateGroups = new Map<
         number,
         { rate: number; taxable: number; taxAmount: number }
       >();
+      for (const rate of STANDARD_GST_RATES) {
+        rateGroups.set(rate, { rate, taxable: 0, taxAmount: 0 });
+      }
       for (const item of data.items) {
         const rate =
           typeof item.taxPercent === "number" && item.taxPercent >= 0
             ? item.taxPercent
             : 5;
         const lineTotal = Number(item.lineTotal) || 0;
+        // rate=0 → goodsBase = lineTotal, tax = 0 (division by 1)
         const goodsBase = lineTotal / (1 + rate / 100);
         const tax = lineTotal - goodsBase;
         const g = rateGroups.get(rate) ?? {
