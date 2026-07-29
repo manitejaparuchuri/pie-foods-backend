@@ -135,6 +135,22 @@ app.get("/healthz", (_req: Request, res: Response) => {
   return res.status(200).json({ status: "ok" });
 });
 
+// api.piefoods.com is an API-only host. Google Search Console flagged it as
+// "Not found (404)" because it discovered the root URL (probably from a stray
+// reference) and the app has no `/` route. Two-part fix:
+//   1) GET / → 301 redirect to the public storefront so any human/crawler
+//      that lands here ends up somewhere useful.
+//   2) A tiny robots.txt telling crawlers not to index anything on this host —
+//      APIs shouldn't appear in search results at all.
+// Both mounted BEFORE the /api routers so they can't be shadowed.
+const SITE_BASE_URL = String(process.env.SITE_BASE_URL || "https://www.piefoods.com").replace(/\/+$/, "");
+app.get("/", (_req: Request, res: Response) => {
+  return res.redirect(301, `${SITE_BASE_URL}/`);
+});
+app.get("/robots.txt", (_req: Request, res: Response) => {
+  res.type("text/plain").send("User-agent: *\nDisallow: /\n");
+});
+
 const assetsPath = join(__dirname, "../assets");
 app.use(
   "/assets",
