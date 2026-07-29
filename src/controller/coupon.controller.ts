@@ -28,16 +28,27 @@ function uidFromRequest(req: Request): string {
  * storefront can show the real discounted total before checkout. Reuses the
  * exact order-time validation inside a read-only transaction (no writes), so
  * the preview matches what will actually be applied.
+ *
+ * SECURITY: every failure branch (unknown code, inactive, expired, not yet
+ * active, min-order, usage-limit) returns the SAME generic message. The
+ * underlying reasons still flow through the throw for admin logging (order
+ * creation surfaces them safely because the user is authenticated), but the
+ * public preview must not distinguish — otherwise an attacker can brute-force
+ * codes and tell valid-but-restricted ones from unknown strings. Rate-limited
+ * separately at the router with a strict per-IP quota.
  */
+const GENERIC_COUPON_ERROR = "This coupon can't be applied.";
+
 export const validateCoupon = async (req: Request, res: Response) => {
   try {
     const code = String(req.body?.code || "").trim();
     const subtotal = Number(req.body?.subtotal);
 
     if (!code) {
-      return res.status(400).json({ message: "Coupon code is required" });
+      return res.status(400).json({ message: GENERIC_COUPON_ERROR });
     }
     if (!Number.isFinite(subtotal) || subtotal <= 0) {
+      // Bad request shape — safe to distinguish, this isn't a coupon-existence signal.
       return res.status(400).json({ message: "A valid cart subtotal is required" });
     }
 
@@ -48,14 +59,15 @@ export const validateCoupon = async (req: Request, res: Response) => {
     );
 
     if (!applied) {
-      return res.status(400).json({ message: "Invalid coupon code" });
+      return res.status(400).json({ message: GENERIC_COUPON_ERROR });
     }
 
     return res.json({ code: applied.code, discountAmount: applied.discountAmount });
-  } catch (error: any) {
-    // validateCouponForAmount throws human-readable reasons (expired, min order…).
-    return res
-      .status(400)
-      .json({ message: error?.message || "Could not validate coupon" });
+  } catch (_error) {
+    // validateCouponForAmount throws human-readable reasons (expired, min-order,
+    // usage limit, etc.). Do NOT expose the reason here — it lets attackers
+    // enumerate valid codes by distinguishing "unknown" from "expired". The
+    // per-user cap is still enforced authoritatively at order-create time.
+    return res.status(400).json({ message: GENERIC_COUPON_ERROR });
   }
 };

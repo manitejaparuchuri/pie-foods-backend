@@ -107,9 +107,28 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+/**
+ * Tight per-IP limits for endpoints that either
+ *   (a) cost the business real money on abuse (coupon brute-force, outbound
+ *       emails via Brevo free tier), or
+ *   (b) let a caller pollute admin inboxes / subscriber lists.
+ * The default 500/15min bucket is not enough for these — an attacker can still
+ * probe 33 codes/min or send 33 contact emails/min from a single IP.
+ */
+const abuseLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: "Too many requests — please wait a minute and try again." },
+});
+
 app.use(globalLimiter);
 app.use("/api/auth", authLimiter);
 app.use("/api/admin/login", authLimiter);
+app.use("/api/coupons/validate", abuseLimiter);
+app.use("/api/contact", abuseLimiter);
+app.use("/api/newsletter", abuseLimiter);
 
 app.use("/api/auth", (_req, res, next) => {
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, private");
