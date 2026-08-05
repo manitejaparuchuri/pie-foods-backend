@@ -741,8 +741,8 @@ export async function sendWelcomeEmail(
       <td style="padding:24px;">
         <p style="font-size:15px;color:#111827;margin:0 0 14px;">${greeting}</p>
         <p style="font-size:14px;color:#374151;line-height:1.65;margin:0 0 18px;">
-          Glad to have you on board. PIE Foods makes India's first monk fruit
-          sweetener and clean freeze-dried fruit snacks — zero sugar, zero
+          Glad to have you on board. PIE Foods makes clean monk fruit
+          sweetener and freeze-dried fruit snacks — zero sugar, zero
           calories, FSSAI-certified, made for real Indian kitchens.
         </p>
         <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:16px 18px;margin-bottom:18px;">
@@ -769,7 +769,7 @@ export async function sendWelcomeEmail(
   const text = `
 ${firstName ? "Hi " + firstName : "Hi there"},
 
-Welcome to PIE Foods! We make India's first monk fruit sweetener and clean freeze-dried fruit snacks.
+Welcome to PIE Foods! We make clean monk fruit sweetener and freeze-dried fruit snacks — zero sugar, zero calories, FSSAI-certified.
 
 What's next:
   - Browse the shop: https://www.piefoods.com/products
