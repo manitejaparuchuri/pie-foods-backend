@@ -874,6 +874,7 @@ export const createBanner = async (req: Request, res: Response) => {
   try {
     const banner = await firestoreCatalogService.upsertBanner({
       image_url: imageUrl,
+      mobile_image_url: String(req.body?.mobile_image_url || "").trim() || null,
       caption,
       title_top: titleTop,
       title_accent: titleAccent,
@@ -929,6 +930,7 @@ export const updateBanner = async (req: Request, res: Response) => {
     const banner = await firestoreCatalogService.upsertBanner({
       banner_id: bannerId,
       image_url: imageUrl,
+      mobile_image_url: String(req.body?.mobile_image_url || "").trim() || null,
       caption,
       title_top: titleTop,
       title_accent: titleAccent,

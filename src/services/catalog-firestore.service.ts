@@ -180,6 +180,7 @@ type ComboWritePayload = {
 type BannerWritePayload = {
   banner_id?: number | null;
   image_url?: string | null;
+  mobile_image_url?: string | null;
   caption: string;
   title_top: string;
   title_accent: string;
@@ -1302,6 +1303,7 @@ class FirestoreCatalogService {
       banner_id: bannerId,
       slug: slugify(`${titleTop} ${titleAccent}`, `banner-${bannerId}`),
       image_url: normalizeNullableString(payload.image_url),
+      mobile_image_url: normalizeNullableString(payload.mobile_image_url),
       caption: String(payload.caption || "").trim(),
       title_top: titleTop,
       title_accent: titleAccent,
