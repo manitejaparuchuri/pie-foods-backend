@@ -26,6 +26,44 @@ const normalizeAnnouncement = (a: any) => ({
   cta_link: String(a.cta_link || ""),
 });
 
+const versionOf = (value: unknown): string => {
+  if (value && typeof (value as { toDate?: unknown }).toDate === "function") {
+    return (value as { toDate: () => Date }).toDate().toISOString();
+  }
+  if (value instanceof Date) return value.toISOString();
+  return typeof value === "string" && value ? value : "default";
+};
+
+/** Public popup payload. A product destination is linked by the product's
+ *  CURRENT slug (slugs are rebuilt from the name on every save), and the
+ *  popup is switched off if that product is missing or hidden, so it can
+ *  never send shoppers to a "Product not found" page. Other destinations are
+ *  site paths the admin entered. `version` changes on every admin save, so
+ *  visitors see an updated popup even if they closed the previous one. */
+const normalizeHomePopup = (popup: any, product: any) => {
+  let link = "";
+  let productName = "";
+  if (popup.product_id) {
+    const slug = String(product?.slug || "").trim();
+    if (product && product.is_active !== false && slug) {
+      link = `/products/${slug}`;
+      productName = String(product.name || "");
+    }
+  } else if (typeof popup.link_path === "string" && /^\/(?!\/)/.test(popup.link_path)) {
+    link = popup.link_path;
+  }
+  const live = Boolean(popup.enabled && popup.image_url && link);
+  return {
+    enabled: live,
+    image_url: live ? String(popup.image_url) : "",
+    mobile_image_url: live ? String(popup.mobile_image_url || "") : "",
+    link: live ? link : "",
+    product_name: live ? productName : "",
+    cta_label: String(popup.cta_label || "Shop Now"),
+    version: versionOf(popup.updated_at),
+  };
+};
+
 export const getStorefrontSettings = async (_req: Request, res: Response) => {
   try {
     const [trialPack, shippingConfig, announcement] = await Promise.all([
@@ -39,6 +77,13 @@ export const getStorefrontSettings = async (_req: Request, res: Response) => {
         firestoreCatalogService.getAnnouncement()
       ),
     ]);
+    const homePopup = await withCache("catalog:storefront:home-popup", FIVE_MIN, async () => {
+      const popup = await firestoreCatalogService.getHomePopup();
+      const product = popup.product_id
+        ? await firestoreCatalogService.getProductById(popup.product_id)
+        : null;
+      return normalizeHomePopup(popup, product);
+    });
 
     res.set("Cache-Control", PUBLIC_CACHE_HEADER);
     return res.json({
@@ -55,6 +100,8 @@ export const getStorefrontSettings = async (_req: Request, res: Response) => {
       trial_pack: normalizeTrialPack(trialPack),
       // Admin-editable top announcement bar / welcome-offer.
       announcement: normalizeAnnouncement(announcement),
+      // Admin-editable home page offer popup (Admin → Home Popup).
+      home_popup: homePopup,
     });
   } catch (error) {
     console.error("GET STOREFRONT SETTINGS ERROR:", error);

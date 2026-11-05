@@ -395,7 +395,7 @@ export const changeAdminPassword = async (req: AuthRequest, res: Response) => {
 
 export const getAdminBootstrap = async (_req: Request, res: Response) => {
   try {
-    const [categories, products, combos, banners, popularShowcase, trialPack, couponDocs] = await Promise.all([
+    const [categories, products, combos, banners, popularShowcase, trialPack, couponDocs, homePopup] = await Promise.all([
       firestoreCatalogService.getAllCategories(),
       firestoreCatalogService.getAllProductsForAdmin(),
       firestoreCatalogService.getAllCombos(),
@@ -403,6 +403,7 @@ export const getAdminBootstrap = async (_req: Request, res: Response) => {
       firestoreCatalogService.getPopularProductShowcase(),
       firestoreCatalogService.getTrialPack(),
       couponsCollection.get(),
+      firestoreCatalogService.getHomePopup(),
     ]);
 
     const productCounts = new Map<number, number>();
@@ -425,6 +426,7 @@ export const getAdminBootstrap = async (_req: Request, res: Response) => {
       banners: banners.map(normalizeFirestoreBannerForAdmin),
       popularShowcase: normalizeFirestorePopularShowcaseForAdmin(popularShowcase),
       trialPack: normalizeFirestoreTrialPackForAdmin(trialPack),
+      homePopup: normalizeHomePopupForAdmin(homePopup, products),
       coupons,
       productImageFields: [...FIRESTORE_PRODUCT_IMAGE_FIELDS],
       supportsProductActive: true,
@@ -997,6 +999,112 @@ export const updatePopularProductsShowcase = async (req: Request, res: Response)
   } catch (error) {
     console.error("UPDATE POPULAR PRODUCTS ERROR:", error);
     return res.status(500).json({ message: "Unable to update popular products" });
+  }
+};
+
+/* ============================ HOME POPUP ============================ */
+
+/** `link_url` is what the admin sees and edits: the product's CURRENT page
+ *  when the popup points at a product, otherwise the saved page path. */
+const normalizeHomePopupForAdmin = (popup: any, products: any[] = []) => {
+  const product = popup.product_id
+    ? products.find((p) => Number(p.product_id) === Number(popup.product_id))
+    : null;
+  return {
+    enabled: popup.enabled !== false,
+    image_url: String(popup.image_url || ""),
+    mobile_image_url: String(popup.mobile_image_url || ""),
+    product_id: popup.product_id ? Number(popup.product_id) : null,
+    link_url: product?.slug ? `/products/${product.slug}` : String(popup.link_path || ""),
+    cta_label: String(popup.cta_label || "Shop Now"),
+    updated_at: toIsoString(popup.updated_at),
+  };
+};
+
+// The storefront's CSP only allows images from its own origin and the R2 CDN,
+// so anything else would render as a broken image in the popup.
+const isAllowedPopupImageUrl = (url: string) =>
+  /^\/assets\/[\w\-./]+\.(webp|png|jpe?g|avif)$/i.test(url) ||
+  /^https:\/\/media\.piefoods\.com\/[^\s"'<>]+$/i.test(url);
+
+/** Accepts "/products/x", "products/x" or a full piefoods.com address and
+ *  returns the site path (query kept, #fragment dropped), or null if the
+ *  link points somewhere else. */
+const toSitePath = (raw: string): string | null => {
+  let value = raw.trim();
+  if (!value) return null;
+  const absolute = value.match(/^https?:\/\/(?:www\.)?piefoods\.com(?=\/|$|\?)(.*)$/i);
+  if (absolute) value = absolute[1] || "/";
+  else if (/^[a-z][a-z0-9+.-]*:/i.test(value) || value.startsWith("//")) return null;
+  else if (!value.startsWith("/")) value = `/${value}`;
+  value = value.split("#")[0];
+  if (value.length > 300 || /[\s"'<>\\\x00-\x1f\x7f]/.test(value)) return null;
+  return value;
+};
+
+export const updateHomePopup = async (req: Request, res: Response) => {
+  const body = req.body || {};
+
+  const enabled = body.enabled === undefined ? 1 : parseBooleanFlag(body.enabled);
+  if (enabled === null) {
+    return res.status(400).json({ message: "Invalid enabled value" });
+  }
+
+  const imageUrl = String(body.image_url || "").trim();
+  if (!imageUrl || !isAllowedPopupImageUrl(imageUrl)) {
+    return res.status(400).json({ message: "Upload a popup image (it must be stored on media.piefoods.com)" });
+  }
+
+  const mobileImageUrl = String(body.mobile_image_url || "").trim();
+  if (mobileImageUrl && !isAllowedPopupImageUrl(mobileImageUrl)) {
+    return res.status(400).json({ message: "The phone image must be stored on media.piefoods.com" });
+  }
+
+  const linkPath = toSitePath(String(body.link_url || ""));
+  if (!linkPath) {
+    return res.status(400).json({ message: "Enter the banner link: a page on piefoods.com, e.g. /products/your-offer-product" });
+  }
+
+  try {
+    // A product link is saved as the product itself, so renaming the product
+    // (which changes its URL) never breaks the banner.
+    let productId: number | null = null;
+    let product: any = null;
+    const productMatch = linkPath.match(/^\/products\/([^/?]+)\/?(?:\?.*)?$/);
+    if (productMatch) {
+      let slug = productMatch[1].toLowerCase();
+      try {
+        slug = decodeURIComponent(productMatch[1]).toLowerCase();
+      } catch {
+        // malformed %-escape: compare the raw text (it simply won't match)
+      }
+      const products = await firestoreCatalogService.getAllProductsForAdmin();
+      product = products.find((p: any) => String(p.slug || "").toLowerCase() === slug) || null;
+      if (!product) {
+        return res.status(400).json({
+          message: "No product has this link. Check the address, or add the product first.",
+        });
+      }
+      productId = Number(product.product_id);
+    }
+
+    const popup = await firestoreCatalogService.upsertHomePopup({
+      enabled,
+      image_url: imageUrl,
+      mobile_image_url: mobileImageUrl,
+      product_id: productId,
+      link_path: productId ? null : linkPath,
+      cta_label: String(body.cta_label || "").trim().slice(0, 30) || "Shop Now",
+    });
+
+    invalidateCatalog();
+    return res.json({
+      message: "Home popup updated",
+      homePopup: normalizeHomePopupForAdmin(popup, product ? [product] : []),
+    });
+  } catch (error) {
+    console.error("UPDATE HOME POPUP ERROR:", error);
+    return res.status(500).json({ message: "Unable to update home popup" });
   }
 };
 

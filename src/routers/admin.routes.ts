@@ -21,6 +21,7 @@ import {
   deleteBanner,
   updatePopularProductsShowcase,
   updateTrialPack,
+  updateHomePopup,
   getShippingConfig,
   updateShippingConfig,
   updateAnnouncement,
@@ -92,6 +93,8 @@ router.delete("/banners/:id", deleteBanner);
 router.put("/popular-products", updatePopularProductsShowcase);
 
 router.put("/trial-pack", updateTrialPack);
+
+router.put("/home-popup", updateHomePopup);
 
 router.get("/shipping-config", getShippingConfig);
 router.put("/shipping-config", updateShippingConfig);

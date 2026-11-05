@@ -261,6 +261,30 @@ type AnnouncementWritePayload = {
   cta_link?: string | null;
 };
 
+/** Admin-editable offer popup shown on the home page. Where it leads is
+ *  either a product (stored as product_id, because product slugs are rebuilt
+ *  from the name on every save, so a stored /products/<slug> link would break
+ *  on rename) or any other site page (stored as link_path). */
+type HomePopupRecord = {
+  enabled: boolean;
+  image_url: string;
+  mobile_image_url: string | null;
+  product_id: number | null;
+  link_path: string | null;
+  cta_label: string;
+  created_at?: Timestamp | Date | string | null;
+  updated_at?: Timestamp | Date | string | null;
+};
+
+type HomePopupWritePayload = {
+  enabled?: boolean | number | string | null;
+  image_url?: string | null;
+  mobile_image_url?: string | null;
+  product_id?: number | null;
+  link_path?: string | null;
+  cta_label?: string | null;
+};
+
 type ShippingConfigWritePayload = {
   shipping_fee?: number | string | null;
   free_shipping_threshold?: number | string | null;
@@ -432,6 +456,20 @@ const DEFAULT_ANNOUNCEMENT: AnnouncementRecord = {
   coupon_code: "WELCOME10",
   cta_label: "Sign up",
   cta_link: "/login?mode=signup",
+};
+
+const HOME_POPUP_DOC_ID = "home_popup";
+
+// Used until an admin saves the popup for the first time: the "Buy 2 Get 1"
+// Monk Fruit Drops artwork bundled with the frontend, pointing at product 42
+// (PIE Monk Fruit Sweetener Drops).
+const DEFAULT_HOME_POPUP: HomePopupRecord = {
+  enabled: true,
+  image_url: "/assets/images/promo/monk-fruit-drops-b2g1-1080.webp",
+  mobile_image_url: null,
+  product_id: 42,
+  link_path: null,
+  cta_label: "Shop Now",
 };
 
 function normalizeNullableString(value: unknown): string | null {
@@ -783,6 +821,26 @@ function mapShippingConfigRecord(raw: Record<string, unknown>): ShippingConfigRe
   };
 }
 
+function mapHomePopupRecord(raw: Record<string, unknown>): HomePopupRecord {
+  const imageUrl = String(raw.image_url ?? "").trim();
+  const mobileImageUrl = String(raw.mobile_image_url ?? "").trim();
+  const productId = Number(raw.product_id);
+  const linkPath = String(raw.link_path ?? "").trim();
+  const ctaLabel = String(raw.cta_label ?? "").trim();
+  const timestamp = (v: unknown) =>
+    v instanceof Timestamp || v instanceof Date || typeof v === "string" ? (v as Timestamp | Date | string) : null;
+  return {
+    enabled: toFirestoreBoolean(raw.enabled, DEFAULT_HOME_POPUP.enabled),
+    image_url: imageUrl || DEFAULT_HOME_POPUP.image_url,
+    mobile_image_url: mobileImageUrl || null,
+    product_id: Number.isInteger(productId) && productId > 0 ? productId : null,
+    link_path: linkPath || null,
+    cta_label: ctaLabel || DEFAULT_HOME_POPUP.cta_label,
+    created_at: timestamp(raw.created_at),
+    updated_at: timestamp(raw.updated_at),
+  };
+}
+
 function mapAnnouncementRecord(raw: Record<string, unknown>): AnnouncementRecord {
   const str = (v: unknown, fallback: string) => {
     const s = String(v ?? "").trim();
@@ -1045,6 +1103,45 @@ class FirestoreCatalogService {
 
     await this.siteSettingsCollection.doc(SHIPPING_CONFIG_DOC_ID).set(shippingData, { merge: true });
     return mapShippingConfigRecord(shippingData);
+  }
+
+  async getHomePopup(): Promise<HomePopupRecord> {
+    const snapshot = await this.siteSettingsCollection.doc(HOME_POPUP_DOC_ID).get();
+    if (!snapshot.exists) {
+      return { ...DEFAULT_HOME_POPUP };
+    }
+    return mapHomePopupRecord(snapshot.data() || {});
+  }
+
+  /** Caller validates image URLs and the product; this only persists. */
+  async upsertHomePopup(payload: HomePopupWritePayload): Promise<HomePopupRecord> {
+    const now = Timestamp.now();
+    const existingSnapshot = await this.siteSettingsCollection.doc(HOME_POPUP_DOC_ID).get();
+    const existing = existingSnapshot.exists
+      ? mapHomePopupRecord(existingSnapshot.data() || {})
+      : null;
+    const base = existing ?? DEFAULT_HOME_POPUP;
+
+    const popupData: Record<string, unknown> = {
+      enabled: toFirestoreBoolean(payload.enabled, base.enabled),
+      image_url: String(payload.image_url ?? base.image_url).trim().slice(0, 500),
+      // An empty string clears the phone image (falls back to the main image).
+      mobile_image_url:
+        payload.mobile_image_url === undefined
+          ? base.mobile_image_url
+          : String(payload.mobile_image_url ?? "").trim().slice(0, 500) || null,
+      product_id: payload.product_id === undefined ? base.product_id : payload.product_id,
+      link_path:
+        payload.link_path === undefined
+          ? base.link_path
+          : String(payload.link_path ?? "").trim().slice(0, 300) || null,
+      cta_label: String(payload.cta_label ?? "").trim().slice(0, 30) || base.cta_label,
+      created_at: existing?.created_at || now,
+      updated_at: now,
+    };
+
+    await this.siteSettingsCollection.doc(HOME_POPUP_DOC_ID).set(popupData, { merge: true });
+    return mapHomePopupRecord(popupData);
   }
 
   async getAnnouncement(): Promise<AnnouncementRecord> {
