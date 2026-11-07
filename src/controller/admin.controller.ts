@@ -117,6 +117,7 @@ const normalizeFirestoreProductForAdmin = (product: any) => ({
   category_id: Number(product.category_id) || 0,
   is_bestseller: product.is_bestseller === true || Number(product.is_bestseller) === 1 ? 1 : 0,
   free_shipping: product.free_shipping === true || Number(product.free_shipping) === 1 ? 1 : 0,
+  coupon_excluded: product.coupon_excluded === true || Number(product.coupon_excluded) === 1 ? 1 : 0,
   is_active: product.is_active === false ? 0 : 1,
   created_at: toIsoString(product.created_at),
 });
@@ -589,6 +590,19 @@ const buildProductPayload = (
     const freeShipRaw = get("free_shipping");
     payload.free_shipping =
       freeShipRaw === true || Number(freeShipRaw) === 1 || String(freeShipRaw).toLowerCase() === "true";
+  }
+
+  // Coupon exclusion: products with this set are never discounted by a
+  // coupon (the rest of the cart still is). Same permissive parse as above.
+  if (
+    Object.prototype.hasOwnProperty.call(body, "coupon_excluded") ||
+    (existing && Object.prototype.hasOwnProperty.call(existing, "coupon_excluded"))
+  ) {
+    const couponExcludedRaw = get("coupon_excluded");
+    payload.coupon_excluded =
+      couponExcludedRaw === true ||
+      Number(couponExcludedRaw) === 1 ||
+      String(couponExcludedRaw).toLowerCase() === "true";
   }
 
   for (let i = 0; i <= 10; i += 1) {

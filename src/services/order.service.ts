@@ -4,6 +4,8 @@ import {
   AppliedCoupon,
   consumeCoupon,
   validateCouponForAmount,
+  splitCouponEligibility,
+  COUPON_ERRORS,
 } from "./coupon.service";
 import { generateOrderNumber } from "./order-number.service";
 import {
@@ -82,6 +84,8 @@ interface CartLineForOrder {
   tax_percent: number;
   /** When true, this product grants free delivery to the whole order. */
   free_shipping: boolean;
+  /** When true, coupons never discount this product. */
+  coupon_excluded: boolean;
   name: string;
   image_url: string | null;
 }
@@ -110,6 +114,7 @@ async function loadCartLines(uid: string): Promise<CartLineForOrder[]> {
         discount_percent: product.discount_percent,
         tax_percent: product.tax_percent,
         free_shipping: product.free_shipping,
+        coupon_excluded: product.coupon_excluded,
         name: product.name,
         image_url: product.image_url,
       };
@@ -178,17 +183,17 @@ class OrderService {
     const shippingConfig = await loadPricingShippingConfig();
 
     const result = await firestore.runTransaction(async (tx) => {
-      const preCouponTotals = calculateTotalsFromSubtotal(
-        subtotalPaise,
-        0,
-        normalizedPaymentMethod,
-        shippingConfig,
-        hasFreeShippingItem
+      // A coupon only discounts products that aren't flagged coupon_excluded.
+      const { eligibleSubtotal } = splitCouponEligibility(pricedItems, (id) =>
+        cartLines.some((line) => line.product_id === id && line.coupon_excluded)
       );
+      if (couponCode && eligibleSubtotal <= 0) {
+        throw new Error(COUPON_ERRORS.NOT_ELIGIBLE);
+      }
       const appliedCoupon: AppliedCoupon | null = await validateCouponForAmount(
         tx,
         uid,
-        preCouponTotals.subtotalAmount,
+        eligibleSubtotal,
         couponCode
       );
       const totals = calculateTotalsFromSubtotal(

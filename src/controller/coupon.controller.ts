@@ -2,7 +2,13 @@ import { Request, Response } from "express";
 import jwt from "jsonwebtoken";
 
 import { firestore } from "../config/firebase";
-import { validateCouponForAmount } from "../services/coupon.service";
+import {
+  COUPON_ERRORS,
+  splitCouponEligibility,
+  validateCouponForAmount,
+} from "../services/coupon.service";
+import { buildPricedItemsAndSubtotal } from "../services/pricing.service";
+import { fetchProductsByIds } from "../services/product-lookup.service";
 
 /** Optional auth: read uid from the bearer token if present, else "". Lets the
  *  storefront preview a coupon for both logged-in users and guests. Per-user
@@ -23,7 +29,10 @@ function uidFromRequest(req: Request): string {
 }
 
 /**
- * POST /api/coupons/validate  { code, subtotal }
+ * POST /api/coupons/validate  { code, subtotal, items? }
+ * `items` ([{ product_id, quantity }]) lets the server price the cart itself
+ * and leave out products flagged coupon_excluded; `subtotal` is only the
+ * fallback for older clients that don't send items.
  * Previews a coupon WITHOUT placing an order, returning the discount so the
  * storefront can show the real discounted total before checkout. Reuses the
  * exact order-time validation inside a read-only transaction (no writes), so
@@ -54,15 +63,66 @@ export const validateCoupon = async (req: Request, res: Response) => {
 
     const uid = uidFromRequest(req);
 
+    // Price the cart server-side when items are supplied, and drop products
+    // that coupons never apply to (e.g. an already-discounted offer product).
+    let couponBase = subtotal;
+    let excludedProducts: string[] = [];
+    const rawItems = Array.isArray(req.body?.items) ? req.body.items.slice(0, 50) : [];
+    if (rawItems.length > 0) {
+      const lines: Array<{ product_id: number; quantity: number }> = [];
+      for (const raw of rawItems) {
+        const productId = Number(raw?.product_id ?? raw?.productId);
+        const quantity = Number(raw?.quantity);
+        if (!Number.isInteger(productId) || productId <= 0 || !Number.isInteger(quantity) || quantity <= 0) {
+          return res.status(400).json({ message: GENERIC_COUPON_ERROR });
+        }
+        lines.push({ product_id: productId, quantity });
+      }
+      const productMap = await fetchProductsByIds(lines.map((l) => l.product_id));
+      if (lines.some((l) => !productMap.has(l.product_id))) {
+        return res.status(400).json({ message: GENERIC_COUPON_ERROR });
+      }
+      const { pricedItems } = buildPricedItemsAndSubtotal(
+        lines.map((l) => ({
+          productId: l.product_id,
+          quantity: l.quantity,
+          mrpRupees: productMap.get(l.product_id)?.price ?? 0,
+          discountPercent: productMap.get(l.product_id)?.discount_percent ?? null,
+        }))
+      );
+      const { eligibleSubtotal, excludedProductIds } = splitCouponEligibility(
+        pricedItems,
+        (id) => productMap.get(id)?.coupon_excluded === true
+      );
+      excludedProducts = Array.from(new Set(excludedProductIds)).map(
+        (id) => productMap.get(id)?.name || ""
+      ).filter(Boolean);
+      if (eligibleSubtotal <= 0) {
+        // Answered before the code is even looked at, so this can't be used
+        // to learn whether a code exists.
+        return res.status(400).json({
+          message:
+            excludedProducts.length > 1
+              ? "This coupon isn't applicable to these products."
+              : COUPON_ERRORS.NOT_ELIGIBLE,
+        });
+      }
+      couponBase = eligibleSubtotal;
+    }
+
     const applied = await firestore.runTransaction((tx) =>
-      validateCouponForAmount(tx, uid, subtotal, code)
+      validateCouponForAmount(tx, uid, couponBase, code)
     );
 
     if (!applied) {
       return res.status(400).json({ message: GENERIC_COUPON_ERROR });
     }
 
-    return res.json({ code: applied.code, discountAmount: applied.discountAmount });
+    return res.json({
+      code: applied.code,
+      discountAmount: applied.discountAmount,
+      excludedProducts,
+    });
   } catch (_error) {
     // validateCouponForAmount throws human-readable reasons (expired, min-order,
     // usage limit, etc.). Do NOT expose the reason here — it lets attackers

@@ -6,6 +6,7 @@ import {
   COUPON_ERRORS,
   consumeCoupon,
   validateCouponForAmount,
+  splitCouponEligibility,
 } from "../services/coupon.service";
 import {
   buildPricedItemsAndSubtotal,
@@ -106,17 +107,18 @@ export const checkout = async (req: AuthRequest, res: Response) => {
     const orderNumber = await generateOrderNumber();
 
     const result = await firestore.runTransaction(async (tx) => {
-      const preCouponTotals = calculateTotalsFromSubtotal(
-        subtotalPaise,
-        0,
-        "RAZORPAY",
-        shippingConfig,
-        hasFreeShippingItem
+      // A coupon only discounts products that aren't flagged coupon_excluded.
+      const { eligibleSubtotal } = splitCouponEligibility(
+        pricedItems,
+        (id) => productMap.get(id)?.coupon_excluded === true
       );
+      if (couponCode && eligibleSubtotal <= 0) {
+        throw new Error(COUPON_ERRORS.NOT_ELIGIBLE);
+      }
       const appliedCoupon = await validateCouponForAmount(
         tx,
         uid,
-        preCouponTotals.subtotalAmount,
+        eligibleSubtotal,
         couponCode
       );
       const totals = calculateTotalsFromSubtotal(

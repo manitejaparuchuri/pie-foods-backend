@@ -14,6 +14,8 @@ export interface ProductSnapshot {
   /** When true, having this product in the cart makes the WHOLE order ship
    *  free (e.g. the monk fruit range). Admin-controlled per product. */
   free_shipping: boolean;
+  /** When true, coupons never discount this product (admin-controlled). */
+  coupon_excluded: boolean;
   image_url: string | null;
 }
 
@@ -67,6 +69,8 @@ export async function fetchProductsByIds(
         tax_percent: taxValid ? taxRaw : 5,
         free_shipping:
           data.free_shipping === true || Number(data.free_shipping) === 1,
+        coupon_excluded:
+          data.coupon_excluded === true || Number(data.coupon_excluded) === 1,
         image_url: (data.image_url as string) || null,
       });
     }

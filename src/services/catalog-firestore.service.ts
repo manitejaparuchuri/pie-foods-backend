@@ -52,6 +52,8 @@ type ProductRecord = {
   is_bestseller?: boolean;
   /** When true, having this product in the cart makes the whole order ship free. */
   free_shipping?: boolean;
+  /** When true, coupons never discount this product (e.g. a product already sold at an offer price). */
+  coupon_excluded?: boolean;
   created_at?: Timestamp | Date | string | null;
   updated_at?: Timestamp | Date | string | null;
   is_active?: boolean;
@@ -162,6 +164,7 @@ type ProductWritePayload = {
   nutrition?: unknown;
   is_bestseller?: boolean | number | string | null;
   free_shipping?: boolean | number | string | null;
+  coupon_excluded?: boolean | number | string | null;
   is_active?: boolean | number | null;
   created_at?: Timestamp | Date | string | null;
 };
@@ -666,6 +669,7 @@ function mapProductRecord(raw: Record<string, unknown>): ProductRecord {
     nutrition: (() => { const a = normalizeNutrition(raw.nutrition); return a && a.length ? a : undefined; })(),
     is_bestseller: raw.is_bestseller === true || Number(raw.is_bestseller) === 1,
     free_shipping: raw.free_shipping === true || Number(raw.free_shipping) === 1,
+    coupon_excluded: raw.coupon_excluded === true || Number(raw.coupon_excluded) === 1,
     created_at:
       raw.created_at instanceof Timestamp || raw.created_at instanceof Date || typeof raw.created_at === "string"
         ? (raw.created_at as Timestamp | Date | string)
@@ -1337,6 +1341,7 @@ class FirestoreCatalogService {
       image_url10: normalizeNullableString(payload.image_url10),
       is_bestseller: toFirestoreBoolean(payload.is_bestseller, existingProduct?.is_bestseller ?? false),
       free_shipping: toFirestoreBoolean(payload.free_shipping, existingProduct?.free_shipping ?? false),
+      coupon_excluded: toFirestoreBoolean(payload.coupon_excluded, existingProduct?.coupon_excluded ?? false),
       is_active: toFirestoreBoolean(payload.is_active, true),
       created_at: existingProduct?.created_at || toFirestoreDate(payload.created_at),
       updated_at: Timestamp.now(),

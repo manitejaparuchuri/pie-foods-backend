@@ -42,6 +42,29 @@ export const COUPON_ERRORS = {
   MIN_ORDER: "Order does not meet minimum amount for this coupon",
   LIMIT_REACHED: "Coupon usage limit reached",
   LIMIT_USER: "Coupon usage limit reached for this user",
+  NOT_ELIGIBLE: "This coupon isn't applicable to this product.",
+};
+
+/**
+ * Splits a priced cart into what a coupon may discount and what it may not.
+ * Lines whose product is flagged coupon_excluded (e.g. an offer product that
+ * is already discounted) are left out of the coupon base, so a coupon only
+ * ever applies to the remaining products. `lineTotal` is in rupees.
+ */
+export const splitCouponEligibility = (
+  pricedItems: Array<{ product_id: number; lineTotal: number }>,
+  isExcluded: (productId: number) => boolean
+): { eligibleSubtotal: number; excludedProductIds: number[] } => {
+  let eligible = 0;
+  const excludedProductIds: number[] = [];
+  for (const item of pricedItems) {
+    if (isExcluded(item.product_id)) {
+      excludedProductIds.push(item.product_id);
+    } else {
+      eligible += Number(item.lineTotal) || 0;
+    }
+  }
+  return { eligibleSubtotal: roundCurrency(eligible), excludedProductIds };
 };
 
 /**
