@@ -1,0 +1,4 @@
+{
+  "indexes": [{ "collectionGroup": "crm_checkout_sync", "queryScope": "COLLECTION", "fields": [{ "fieldPath": "closed", "order": "ASCENDING" }, { "fieldPath": "next_at", "order": "ASCENDING" }] }],
+  "fieldOverrides": []
+}

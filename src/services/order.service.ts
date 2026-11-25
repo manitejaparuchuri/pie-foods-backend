@@ -19,6 +19,7 @@ import {
 } from "./order-notifications.service";
 import { getFirestoreProductsCollectionName } from "../config/catalog";
 import firestoreCatalogService from "./catalog-firestore.service";
+import { writeCrmSync } from "./crm-sync.service";
 
 /** Map the Firestore shipping-config doc (snake_case) onto the pricing
  *  engine's camelCase ShippingConfig override. */
@@ -269,6 +270,8 @@ class OrderService {
       if (appliedCoupon) {
         await consumeCoupon(tx, uid, orderRef.id, appliedCoupon);
       }
+
+      writeCrmSync(tx, "order", orderRef.id);
 
       if (isCod) {
         stockSnaps.forEach((snap, idx) => {

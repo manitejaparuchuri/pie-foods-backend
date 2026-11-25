@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { Timestamp } from "firebase-admin/firestore";
 import { firestore } from "../config/firebase";
 import getRazorpayClient from "../config/razorpay";
+import { recordCrmPaymentActivity, wakeCrmPaymentSync } from "../services/crm-sync.service";
 import { getFirestoreProductsCollectionName } from "../config/catalog";
 import { loadGuestOrderForAccess } from "../services/guest-order.service";
 import {
@@ -87,6 +88,7 @@ export const createGuestPaymentOrder = async (req: Request, res: Response) => {
       try {
         const existing = await razorpay.orders.fetch(existingProviderOrderId);
         if (existing && Number(existing.amount) === amountInPaise) {
+          await recordCrmPaymentActivity(orderId);
           return res.json({
             key_id: String(process.env.RAZORPAY_KEY_ID || "").trim(),
             razorpay_order_id: existing.id,
@@ -114,6 +116,8 @@ export const createGuestPaymentOrder = async (req: Request, res: Response) => {
       provider_order_id: razorpayOrder.id,
       updated_at: Timestamp.now(),
     });
+
+    await recordCrmPaymentActivity(orderId);
 
     return res.json({
       key_id: String(process.env.RAZORPAY_KEY_ID || "").trim(),
@@ -214,6 +218,7 @@ export const verifyGuestPayment = async (req: Request, res: Response) => {
           updated_at: Timestamp.now(),
         });
       }
+      await wakeCrmPaymentSync(orderId);
       return res.json({
         message: "Payment already verified",
         order_id: orderId,
@@ -334,6 +339,7 @@ export const verifyGuestPayment = async (req: Request, res: Response) => {
       console.error("customer confirm notify (guest verify) failed:", err)
     );
 
+    await wakeCrmPaymentSync(orderId);
     return res.json({
       message: "Payment verified successfully",
       order_id: orderId,

@@ -24,6 +24,9 @@ import popularProductsRoutes from "./routers/popular-products.routes";
 import storefrontRoutes from "./routers/storefront.routes";
 import cronRoutes from "./routers/cron.routes";
 import leadRoutes from "./routers/abandoned-checkout.routes";
+import { startCrmSync } from "./services/crm-sync.service";
+import crmRecoveryRoutes from "./routers/crm-recovery.routes";
+import localPaymentsRoutes from "./routers/local-payments.routes";
 
 const app = express();
 app.disable("x-powered-by");
@@ -185,9 +188,11 @@ app.use("/api/products", productRoutes);
 app.use("/api/auth", loginRoutes);
 app.use("/api/cart", cartRoutes);
 app.use("/api/checkout", checkoutRoutes);
+app.use("/api/checkout/recovery", crmRecoveryRoutes);
 app.use("/api/shipping", shippingRoutes);
 app.use("/api/orders", orderRoutes);
 app.use("/api/payment", paymentRoutes);
+app.use("/api/local-payments", localPaymentsRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/coupons", couponRoutes);
 app.use("/api/contact", contactRoutes);
@@ -213,4 +218,5 @@ const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log("Server running on port", PORT);
+  startCrmSync();
 });

@@ -2,10 +2,11 @@ import { Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { isAuthFlowError, registerWithFirebaseAuth } from "../services/firebase-auth.service";
 import { notifyCustomerWelcome } from "../services/order-notifications.service";
+import { recordCrmEnquiry } from "../services/crm-sync.service";
 
 export const register = async (req: Request, res: Response) => {
   try {
-    const { name, email, password, phone, address } = req.body;
+    const { name, email, password, phone, address, referral_code } = req.body;
     const normalizedEmail = String(email || "").trim().toLowerCase();
 
     if (!name || !normalizedEmail || !password) {
@@ -25,6 +26,9 @@ export const register = async (req: Request, res: Response) => {
       process.env.JWT_SECRET as string,
       { expiresIn: "1d" }
     );
+
+    // Every new website account becomes a CRM lead (requirement §15.1); never blocks the sign-up.
+    await recordCrmEnquiry("registration", { name: user.name || String(name || ""), email: user.email || normalizedEmail, phone: user.phone || (phone ? String(phone) : ""), user_id: user.uid, referral_code: typeof referral_code === "string" ? referral_code : undefined });
 
     // Welcome email (best-effort, never blocks the response).
     notifyCustomerWelcome(user.email || normalizedEmail, user.name || name).catch(

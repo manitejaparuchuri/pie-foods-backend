@@ -13,6 +13,7 @@ import {
 } from "./order-notifications.service";
 import { getFirestoreProductsCollectionName } from "../config/catalog";
 import firestoreCatalogService from "./catalog-firestore.service";
+import { writeCrmSync } from "./crm-sync.service";
 
 /** Map the Firestore shipping-config doc onto the pricing engine override. */
 const loadPricingShippingConfig = async () => {
@@ -277,6 +278,7 @@ export async function createGuestOrder(
         }
       });
       tx.set(orderRef, orderData);
+      writeCrmSync(tx, "order", orderRef.id);
       stockSnaps.forEach((snap, idx) => {
         const stock = Number((snap.data() as Record<string, unknown>).stock_quantity ?? 0);
         tx.update(stockRefs[idx], {
@@ -291,7 +293,10 @@ export async function createGuestOrder(
     notifyAdminOrderReceived(orderRef.id).catch(() => undefined);
     notifyCustomerOrderConfirmed(orderRef.id).catch(() => undefined);
   } else {
-    await orderRef.set(orderData);
+    const batch = firestore.batch();
+    batch.set(orderRef, orderData);
+    writeCrmSync(batch, "order", orderRef.id);
+    await batch.commit();
   }
 
   return {

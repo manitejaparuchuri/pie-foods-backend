@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import axios from "axios";
 import nodemailer from "nodemailer";
+import { recordCrmEnquiry } from "../services/crm-sync.service";
 
 const REQUIRED_FIELDS = ["name", "email", "message"] as const;
 
@@ -370,6 +371,8 @@ export const submitContact = async (req: Request, res: Response) => {
 
   const toAddress = process.env.CONTACT_TO_EMAIL || "piefoodsonline@gmail.com";
   const payload = normalizeContactPayload(req.body);
+  // Recorded before email delivery, so an email-provider failure never loses the enquiry from the CRM
+  await recordCrmEnquiry("contact_form", { name: payload.name, email: payload.email, phone: payload.phone, subject: payload.subject, message: payload.message });
   const hasBrevo = Boolean(String(process.env.BREVO_API_KEY || "").trim());
 
   if (hasBrevo) {

@@ -256,8 +256,13 @@ export async function loginWithFirebaseAuth(emailInput: string, password: string
 
 async function signInWithFirebasePassword(email: string, password: string, apiKey: string) {
   try {
+    // Local Auth emulator only (the Admin SDK honours the same variable); production is unchanged.
+    const emulatorHost = getEnvValue("FIREBASE_AUTH_EMULATOR_HOST");
+    const identityBase = emulatorHost
+      ? `http://${emulatorHost}/identitytoolkit.googleapis.com`
+      : "https://identitytoolkit.googleapis.com";
     return await axios.post(
-      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${apiKey}`,
+      `${identityBase}/v1/accounts:signInWithPassword?key=${apiKey}`,
       {
         email,
         password,

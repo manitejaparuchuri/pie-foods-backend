@@ -4,6 +4,7 @@ import { Timestamp } from "firebase-admin/firestore";
 import { firestore } from "../config/firebase";
 import { getFirestoreProductsCollectionName } from "../config/catalog";
 import { AuthRequest } from "../middlewares/auth";
+import { recordCrmPaymentActivity, wakeCrmPaymentSync } from "../services/crm-sync.service";
 import {
   clearUserCart,
   createRazorpayOrderService,
@@ -48,6 +49,7 @@ export const createPaymentOrder = async (req: AuthRequest, res: Response) => {
     }
 
     const order = await createRazorpayOrderService(orderId, uid);
+    await recordCrmPaymentActivity(orderId);
 
     // key_id is a PUBLIC identifier — the frontend needs it to open Razorpay
     // checkout. The secret never leaves the server.
@@ -105,6 +107,7 @@ export const verifyPayment = async (req: AuthRequest, res: Response) => {
       uid
     );
 
+    await wakeCrmPaymentSync(orderId);
     return res.json({ message: "Payment verified successfully", order_id: orderId });
   } catch (error: any) {
     console.error("VERIFY PAYMENT ERROR:", error);
@@ -392,6 +395,7 @@ export const razorpayWebhook = async (req: Request, res: Response) => {
     }
 
     console.log("Payment saved via webhook:", paymentId);
+    await wakeCrmPaymentSync(resolvedOrderId);
     return res.status(200).json({ status: "ok" });
   } catch (err) {
     console.error("Webhook error:", err);

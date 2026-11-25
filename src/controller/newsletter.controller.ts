@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { Timestamp } from "firebase-admin/firestore";
 import { firestore } from "../config/firebase";
+import { recordCrmEnquiry } from "../services/crm-sync.service";
 
 const collection = firestore.collection("newsletter_subscribers");
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -21,6 +22,8 @@ export const subscribeNewsletter = async (req: Request, res: Response) => {
       },
       { merge: true }
     );
+    // An email sign-up is a lead; it is not WhatsApp marketing consent, so none is sent to the CRM
+    await recordCrmEnquiry("newsletter", { email });
 
     return res.status(200).json({ message: "Subscribed" });
   } catch (error) {
