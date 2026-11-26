@@ -15,6 +15,7 @@ import {
 import { fetchProductsByIds } from "../services/product-lookup.service";
 import firestoreCatalogService from "../services/catalog-firestore.service";
 import { generateOrderNumber } from "../services/order-number.service";
+import { writeCrmSync } from "../services/crm-sync.service";
 
 /** Map the Firestore shipping-config doc onto the pricing engine override. */
 const loadPricingShippingConfig = async () => {
@@ -170,6 +171,8 @@ export const checkout = async (req: AuthRequest, res: Response) => {
       if (appliedCoupon) {
         await consumeCoupon(tx, uid, orderRef.id, appliedCoupon);
       }
+
+      writeCrmSync(tx, "order", orderRef.id);
 
       return {
         orderId: orderRef.id,

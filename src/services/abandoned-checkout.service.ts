@@ -1,5 +1,6 @@
 import { Timestamp } from "firebase-admin/firestore";
 import { firestore } from "../config/firebase";
+import { writeCrmSync } from "./crm-sync.service";
 
 /**
  * Abandoned-checkout / lead capture.
@@ -101,7 +102,10 @@ export async function upsertCheckoutLead(input: LeadInput): Promise<void> {
     payload.created_at = now;
   }
 
-  await ref.set(payload, { merge: true });
+  const batch = firestore.batch();
+  batch.set(ref, payload, { merge: true });
+  writeCrmSync(batch, "lead", leadId);
+  await batch.commit();
 }
 
 /** Mark a lead CONVERTED once the customer successfully places an order. */

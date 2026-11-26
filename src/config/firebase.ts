@@ -77,6 +77,11 @@ function getFirebaseApp() {
     return getApps()[0];
   }
 
+  // Isolated local Docker runs use the emulator; never load production credentials here.
+  if (process.env.FIRESTORE_EMULATOR_HOST) {
+    return initializeApp({ projectId: process.env.GCLOUD_PROJECT || "demo-pie-crm-local" });
+  }
+
   const serviceAccountJson = parseServiceAccountJson();
   if (serviceAccountJson) {
     return initFirebaseWithServiceAccount(serviceAccountJson);

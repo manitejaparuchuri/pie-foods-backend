@@ -2,6 +2,7 @@ import { Request, Response } from "express";
 import { Timestamp } from "firebase-admin/firestore";
 import { firestore } from "../config/firebase";
 import { AuthRequest } from "../middlewares/auth";
+import { wakeCrmPaymentSync } from "../services/crm-sync.service";
 import {
   generateWaybill,
   createShipment,
@@ -632,6 +633,8 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
     // notifier is idempotent so it won't double-send if the tracking cron also
     // fires). Cancellations and deliveries especially should reach the customer.
     const order = orderSnap.data() as Record<string, unknown>;
+    // A delivered COD order is now paid: let the CRM record the purchase
+    if (newStatus === "DELIVERED" && order.payment_method === "COD") await wakeCrmPaymentSync(orderId);
     if (newStatus === "CANCELLED") {
       notifyCustomerOrderCancelled(orderId).catch((err) =>
         console.error("cancel notify failed:", err)
