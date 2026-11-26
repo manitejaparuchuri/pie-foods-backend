@@ -1,5 +1,6 @@
 import { Timestamp } from "firebase-admin/firestore";
 import { firestore } from "../config/firebase";
+import { wakeCrmPaymentSync } from "./crm-sync.service";
 import { isDelhiveryConfigured, trackShipment } from "./delhivery.service";
 import {
   notifyCustomerOrderDelivered,
@@ -147,6 +148,8 @@ export async function pollInFlightOrders(): Promise<PollResult> {
       }
 
       await doc.ref.update(updates);
+      // A delivered COD order is now paid: let the CRM record the purchase
+      if (updates.status === "DELIVERED" && data.payment_method === "COD") await wakeCrmPaymentSync(doc.id);
       result.updated++;
       result.details.push({
         orderId: doc.id,

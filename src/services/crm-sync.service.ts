@@ -136,7 +136,7 @@ async function syncEnquiry(ref: FirebaseFirestore.DocumentReference, state: any)
   await ref.update({ closed: true, contact_id: captured?.contact_id || null, synced_at: Timestamp.now() });
 }
 
-async function syncOne(ref: FirebaseFirestore.DocumentReference, state: any): Promise<void> {
+async function syncOne(ref: FirebaseFirestore.DocumentReference, state: any): Promise<number | void> {
   if (state.kind === "enquiry") return syncEnquiry(ref, state);
   const source = await firestore.collection(state.kind === "lead" ? "abandoned_checkouts" : "orders").doc(state.source_id).get();
   if (!source.exists) { await ref.update({ closed: true }); return; }
@@ -158,13 +158,12 @@ async function syncOne(ref: FirebaseFirestore.DocumentReference, state: any): Pr
     await ref.update({ pending_event: FieldValue.delete(), pending_ack: FieldValue.delete() });
   }
   if (state.pending_event) await event(ref, state, {});
-  if (data.payment_method === "COD" || !["PENDING_PAYMENT", "PAID"].includes(String(data.status))) {
+  if (data.payment_method === "COD") return syncCodOrder(ref, state, data);
+  if (!["PENDING_PAYMENT", "PAID"].includes(String(data.status))) {
     if (state.activity_revision) await event(ref, state, { ...common, event: "cancel" });
     await ref.update({ closed: true }); return;
   }
-  const items = (data.items || []).map((item: any) => ({ sku: String(item.sku || item.product_id), name: String(item.name || "Product"), quantity: Number(item.quantity), price: Number(item.price) }));
-  const total = Number(data.total_amount);
-  if (!items.length || !Number.isFinite(total) || total <= 0) throw new Error("Invalid authoritative order");
+  const { items, total } = orderLines(data);
   if (!expired && Number(state.activity_revision || 0) !== Number(state.revision)) {
     const expires = Number(state.expires || Date.now() + 24 * 3600000);
     const secret = process.env.CRM_RECOVERY_SIGNING_SECRET || "";
@@ -196,7 +195,46 @@ async function syncOne(ref: FirebaseFirestore.DocumentReference, state: any): Pr
   } else {
     if (expired) { await ref.update({ closed: true }); return; }
     await event(ref, state, { ...common, event: "payment_status", payment_status: status, checked_at: new Date().toISOString() });
+    // An unpaid checkout stays open until it is paid or its link expires (24h). Re-check every minute for the
+    // first 15 minutes, then every 15 minutes: a payment wakes the row immediately anyway, and polling each
+    // minute for a day would cost ~1,400 Razorpay calls and several thousand Firestore writes per abandoned order.
+    const age = Date.now() - (state.activity_at?.toMillis?.() || Date.now());
+    return localPaymentsEnabled() || age < 15 * 60000 ? undefined : 15 * 60000;
   }
+}
+
+function orderLines(data: any): { items: Array<{ sku: string; name: string; quantity: number; price: number }>; total: number } {
+  const items = (data.items || []).map((item: any) => ({ sku: String(item.sku || item.product_id), name: String(item.name || "Product"), quantity: Number(item.quantity), price: Number(item.price) }));
+  const total = Number(data.total_amount);
+  if (!items.length || !Number.isFinite(total) || total <= 0) throw new Error("Invalid authoritative order");
+  return { items, total };
+}
+
+const COD_OPEN_STATUSES = ["PROCESSING", "SHIPPED", "OUT_FOR_DELIVERY"];
+
+/**
+ * COD orders go to the CRM as real orders: "unpaid" when placed, "paid" once delivered (cash collected).
+ * "paid" triggers the CRM's purchase actions (referral credit etc.), so it must wait for delivery; a
+ * cancelled or returned COD order is never marked paid. The row closes after each step and is re-opened
+ * by the DELIVERED transition (admin status update or tracking poll), so nothing polls while in transit.
+ */
+async function syncCodOrder(ref: FirebaseFirestore.DocumentReference, state: any, data: any): Promise<void> {
+  const status = String(data.status || "");
+  if (state.cod_status === "paid") { await ref.update({ closed: true }); return; }
+  const { items, total } = orderLines(data);
+  const base = { source: "website", reference: String(state.source_id), contact_id: state.contact_id, currency: "INR", total_price: total, items };
+  if (status === "DELIVERED") {
+    const deliveredAt: Date | undefined = data.delivered_at?.toDate?.();
+    await crm("orders", { ...base, payment_status: "paid", ...(deliveredAt ? { purchased_at: deliveredAt.toISOString() } : {}) });
+    await ref.update({ closed: true, cod_status: "paid", synced_at: Timestamp.now() });
+    return;
+  }
+  if (COD_OPEN_STATUSES.includes(status) && state.cod_status !== "unpaid") {
+    await crm("orders", { ...base, payment_status: "unpaid" });
+    await ref.update({ closed: true, cod_status: "unpaid", synced_at: Timestamp.now() });
+    return;
+  }
+  await ref.update({ closed: true });
 }
 
 let running = false;
@@ -216,12 +254,18 @@ export async function runCrmSync(): Promise<{ enabled: boolean; scanned: number;
         return true;
       });
       if (!acquired) continue;
-      try { await syncOne(row.ref, (await row.ref.get()).data()); result.synced++; }
-      catch (error) { result.deferred++; console.error("[crm-sync] sync deferred; durable record retained", row.id, "-", (error as Error)?.message || "unknown"); }
+      const failures = Number(row.data().failures || 0);
+      let delay: number | void = undefined;
+      let failed = false;
+      try { delay = await syncOne(row.ref, (await row.ref.get()).data()); result.synced++; }
+      catch (error) { failed = true; result.deferred++; console.error("[crm-sync] sync deferred; durable record retained", row.id, "-", (error as Error)?.message || "unknown"); }
       finally {
+        const base = localPaymentsEnabled() ? 3000 : 60000;
+        // Repeated failures (CRM down, bad config, order without phone/email) back off 1, 2, 4… minutes up to 6 hours
+        const wait = failed ? Math.min(base * 2 ** Math.min(failures, 9), 6 * 3600000) : (delay || base);
         await firestore.runTransaction(async (tx) => {
           const fresh = (await tx.get(row.ref)).data();
-          if (fresh?.lease_token === token) tx.update(row.ref, { lease_until: Timestamp.fromMillis(0), next_at: Timestamp.fromMillis(Date.now() + (localPaymentsEnabled() ? 3000 : 60000)) });
+          if (fresh?.lease_token === token) tx.update(row.ref, { lease_until: Timestamp.fromMillis(0), next_at: Timestamp.fromMillis(Date.now() + wait), failures: failed ? failures + 1 : 0 });
         });
       }
     }
