@@ -11,14 +11,17 @@ const router = Router();
 router.use(rateLimit({ windowMs: 60000, max: 20, standardHeaders: true, legacyHeaders: false }));
 router.use((_req, res, next) => { res.setHeader("Cache-Control", "no-store"); res.setHeader("Referrer-Policy", "no-referrer"); next(); });
 
-async function load(req: Request) {
+// allowPaid: only /verify may load an order the Razorpay webhook has already marked PAID (the webhook can
+// land before the browser verifies). The verify handlers check the payment signature first.
+async function load(req: Request, allowPaid = false) {
   if (process.env.CRM_SYNC_ENABLED !== "true") throw new Error("unavailable");
   const token = String(req.body?.token || req.query.token || "");
   const id = readRecovery(token, process.env.CRM_RECOVERY_SIGNING_SECRET || "");
   if (!id) throw new Error("unavailable");
   const snapshot = await firestore.collection("orders").doc(id).get();
   const data = snapshot.data();
-  if (!data || data.status !== "PENDING_PAYMENT" || data.payment_method !== "RAZORPAY") throw new Error("unavailable");
+  const okStatus = data?.status === "PENDING_PAYMENT" || (allowPaid && data?.status === "PAID");
+  if (!data || !okStatus || data.payment_method !== "RAZORPAY") throw new Error("unavailable");
   return { id, data };
 }
 
@@ -37,7 +40,7 @@ router.post("/activity", async (req: Request, res: Response) => {
 
 for (const operation of ["payment", "verify"] as const) router.post(`/${operation}`, async (req: AuthRequest, res: Response) => {
   try {
-    const { id, data } = await load(req);
+    const { id, data } = await load(req, operation === "verify");
     // Only the order selected by the signed capability may be paid; never trust body order/user IDs.
     req.body = { order_id: id, orderId: id, razorpay_order_id: req.body?.razorpay_order_id, razorpay_payment_id: req.body?.razorpay_payment_id, razorpay_signature: req.body?.razorpay_signature };
     if (data.is_guest) {
