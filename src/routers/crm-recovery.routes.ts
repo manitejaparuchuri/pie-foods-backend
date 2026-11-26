@@ -25,7 +25,8 @@ async function load(req: Request) {
 router.get("/", async (req: Request, res: Response) => {
   try {
     const { id, data } = await load(req);
-    return res.json({ orderId: id, currency: "INR", totalAmount: data.total_amount, items: (data.items || []).map((item: any) => ({ productId: item.product_id, name: item.name, quantity: item.quantity, price: item.price })) });
+    // orderNumber is the customer-facing PF… number; orderId (internal) is only used for navigation after payment
+    return res.json({ orderId: id, orderNumber: data.order_number ? String(data.order_number) : null, currency: "INR", totalAmount: data.total_amount, items: (data.items || []).map((item: any) => ({ productId: item.product_id, name: item.name, quantity: item.quantity, price: item.price })) });
   } catch { return res.status(404).json({ message: "Recovery link is unavailable or expired" }); }
 });
 
@@ -41,6 +42,12 @@ for (const operation of ["payment", "verify"] as const) router.post(`/${operatio
     req.body = { order_id: id, orderId: id, razorpay_order_id: req.body?.razorpay_order_id, razorpay_payment_id: req.body?.razorpay_payment_id, razorpay_signature: req.body?.razorpay_signature };
     if (data.is_guest) {
       req.body.guestAccessToken = data.guest_access_token;
+      if (operation === "verify") {
+        // After a verified payment, return the guest access token like the normal guest checkout does,
+        // so the customer can open their order confirmation page.
+        const send = res.json.bind(res);
+        res.json = ((body: any) => send(res.statusCode < 400 && body?.order_id ? { ...body, guest_access_token: data.guest_access_token } : body)) as Response["json"];
+      }
       return operation === "payment" ? createGuestPaymentOrder(req, res) : verifyGuestPayment(req, res);
     }
     req.user = { uid: String(data.user_id) } as AuthRequest["user"];
